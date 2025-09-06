@@ -17,7 +17,7 @@ In this repo I provide a "Plug and play" Golang microservice that would mitigate
 - Shared secret authentication between services
 - Time-based passwords prevent that if a used token gets compromised, after a configurable time window it will stop being valid
 - HTTPS encryption for all service-to-service communication
-- WebSocket connections secured with WSS protocol
+- WebSocket connections secured with WSS protocol + JWT for user authentication.
 
 
 ## 💡 How It Works
@@ -41,9 +41,11 @@ For global applications, you can deploy a microservice node in each major geogra
 Modern backend systems can quickly become complex. By offloading real-time update logic to a dedicated microservice, you can keep your main backend clean and focused on business logic. This separation of concerns simplifies development, bug fixing, and future feature additions.
 
 ## Overcoming framework limitations
-Frameworks like Node.js, while excellent for I/O-bound tasks, struggle with CPU-intensive operations and true parallelism due to their single-threaded nature. Broadcasting to a large number of clients can be slow and memory-intensive.
+Frameworks like Node.js, while excellent for I/O-bound tasks, struggle with CPU-intensive operations and true parallelism due to their single-threaded nature. Broadcasting to a large number of clients can be slow and memory-intensive while also handling multuple WS connection can generate too much pressure on the main event loop, while solutions with work threads are possible they are far from ideal and introduce too much complexity to the system without achieving reliable results.
 
 Go's concurrency model, with its lightweight Goroutines and built-in scheduler, excels at handling many concurrent connections efficiently. This leads to a smaller memory footprint and faster broadcast times, making it an ideal choice for this type of service.
+
+By combining the to with an easy web hook integration we get fast and reliable development for CRUD operations logic using NodeJS for the business logic layer while not letting NodeJS runtime limitations slow down other features.
 
 ## Bandwidth and resource optimization
 Deploying microservice nodes closer to your users reduces the burden on your main server. It minimizes the amount of data sent across long distances, lowering bandwidth costs and freeing up resources on your central infrastructure. This approach makes your overall system more reliable and cost-effective.
