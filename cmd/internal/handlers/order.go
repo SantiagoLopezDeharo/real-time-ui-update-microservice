@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"real-time-ui-update-microservice/cmd/internal/hub"
-	"real-time-ui-update-microservice/cmd/internal/models"
 )
 
 func HandleOrderUpdate(h *hub.Hub) http.HandlerFunc {
@@ -16,32 +15,28 @@ func HandleOrderUpdate(h *hub.Hub) http.HandlerFunc {
 			return
 		}
 
+		// Read the raw request body
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "Error reading body", http.StatusBadRequest)
 			return
 		}
 
-		var order models.Order
-		if err := json.Unmarshal(body, &order); err != nil {
+		// Basic validation - ensure it's valid JSON
+		if !isValidJSON(body) {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
 
-		// Validate order data
-		if order.ID == "" || order.Item == "" || order.Amount <= 0 {
-			http.Error(w, "Invalid order data", http.StatusBadRequest)
-			return
-		}
-
-		orderJSON, err := json.Marshal(order)
-		if err != nil {
-			http.Error(w, "Error processing order", http.StatusInternalServerError)
-			return
-		}
-
-		// Broadcast to all connected clients
-		h.BroadcastMessage(orderJSON)
+		// Broadcast the raw JSON to all connected clients
+		h.BroadcastMessage(body)
 		w.WriteHeader(http.StatusAccepted)
 	}
+}
+
+// isValidJSON checks if the byte slice contains valid JSON
+func isValidJSON(data []byte) bool {
+	// For a generic service, we just check if it can be unmarshaled into interface{}
+	var js interface{}
+	return json.Unmarshal(data, &js) == nil
 }

@@ -28,7 +28,7 @@ func main() {
 	r.Handle("/ws", auth.Middleware(handlers.HandleWebSocket(h)))
 
 	// Order update endpoint with time-based token authentication
-	r.Handle("/order", auth.TimeTokenMiddleware(handlers.HandleOrderUpdate(h))).Methods("POST")
+	r.Handle("/update", auth.TimeTokenMiddleware(handlers.HandleOrderUpdate(h))).Methods("POST")
 
 	log.Printf("Server starting on :%s", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, r))

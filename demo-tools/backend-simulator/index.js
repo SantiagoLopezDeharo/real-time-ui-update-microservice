@@ -9,7 +9,7 @@ require("dotenv").config({ path: path.resolve(__dirname, ".env") });
 
 // Configuration
 const config = {
-  apiUrl: process.env.API_URL || "http://localhost:8080/order",
+  apiUrl: process.env.API_URL || "http://localhost:8080/update",
   timeTokenSecret: process.env.TIME_TOKEN_SECRET || "your-time-token-secret",
   timeWindow: parseInt(process.env.TIME_WINDOW_SECONDS) || 3600,
 };

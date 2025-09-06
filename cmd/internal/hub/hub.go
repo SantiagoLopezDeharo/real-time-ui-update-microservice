@@ -159,13 +159,15 @@ func (c *Client) ReadPump(h *Hub) {
 	})
 
 	for {
-		_, _, err := c.Conn.ReadMessage()
+		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("WebSocket error: %v", err)
 			}
 			break
 		}
-		// you could process incoming messages here if needed
+
+		// Optional: Log received messages for debugging
+		log.Printf("Received message: %s", string(message))
 	}
 }
