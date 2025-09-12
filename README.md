@@ -5,7 +5,7 @@ A plug and play solution for real time updates on the UI for distributed systems
 |Component |	Technology | Purpose |
 |----------|-----------|----------|
 |Microservice Runtime|	<img height="40" src="https://raw.githubusercontent.com/marwin1991/profile-technology-icons/refs/heads/main/icons/go.png"> Go |High-concurrency WebSocket handling|
-|Web Server|<img height="40" src="https://raw.githubusercontent.com/marwin1991/profile-technology-icons/refs/heads/main/icons/nginx.png"> Nginx |Reverse proxy and load balancing|
+|Web Server|<img height="40" src="https://raw.githubusercontent.com/marwin1991/profile-technology-icons/refs/heads/main/icons/nginx.png"> Nginx |Reverse proxy and SSL termination|
 |Authentication| TOTP (Time-based One-Time Password)	|Secure service-to-service communication|
 
 ## Overview
