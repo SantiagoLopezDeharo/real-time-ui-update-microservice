@@ -41,12 +41,16 @@ function generateTimeToken() {
   return encodedToken;
 }
 
-// Send order to microservice
-async function sendOrder(order) {
+// Send order to microservice (private requests can include a channelName)
+async function sendOrder(order, channelName) {
   try {
     const token = generateTimeToken();
+    let url = config.apiUrl;
+    if (channelName && channelName !== '') {
+      url = `${url}?channel=${encodeURIComponent(channelName)}`;
+    }
 
-    const response = await axios.post(config.apiUrl, order, {
+    const response = await axios.post(url, order, {
       headers: {
         "Content-Type": "application/json",
         "X-API-Token": token,
@@ -137,6 +141,16 @@ async function showMenu() {
 
   const targetUrl = channel === "private" ? config.apiUrl : config.publishUrl;
 
+  // Ask for logical channel name to publish into
+  const { channelName } = await inquirer.prompt([
+    {
+      type: "input",
+      name: "channelName",
+      message: "Channel name to publish to (default):",
+      default: "default",
+    },
+  ]);
+
   if (action === "single") {
     const answers = await inquirer.prompt([
       {
@@ -160,10 +174,11 @@ async function showMenu() {
     ]);
 
     const result = await (async () => {
-      if (channel === "private") return await sendOrder(answers);
-      // Public: POST without token to publishUrl
+      if (channel === "private") return await sendOrder(answers, channelName);
+      // Public: POST to publishUrl with channel query (include time token so server can validate origin)
       try {
-        await axios.post(targetUrl, answers, { headers: { "Content-Type": "application/json" }, timeout: 5000 });
+        const token = generateTimeToken();
+        await axios.post(`${targetUrl}?channel=${encodeURIComponent(channelName)}`, answers, { headers: { "Content-Type": "application/json", "X-API-Token": token }, timeout: 5000 });
         return { success: true };
       } catch (err) {
         return { success: false, error: err.response?.data || err.message };
@@ -195,9 +210,10 @@ async function showMenu() {
     for (let i = 1; i <= count; i++) {
       const order = generateRandomOrder();
       const result = await (async () => {
-        if (channel === "private") return await sendOrder(order);
+        if (channel === "private") return await sendOrder(order, channelName);
         try {
-          await axios.post(targetUrl, order, { headers: { "Content-Type": "application/json" }, timeout: 5000 });
+          const token = generateTimeToken();
+          await axios.post(`${targetUrl}?channel=${encodeURIComponent(channelName)}`, order, { headers: { "Content-Type": "application/json", "X-API-Token": token }, timeout: 5000 });
           return { success: true };
         } catch (err) {
           return { success: false, error: err.response?.data || err.message };
@@ -228,9 +244,10 @@ async function showMenu() {
     console.log(chalk.blue("Generated order:"), order);
 
     const result = await (async () => {
-      if (channel === "private") return await sendOrder(order);
+      if (channel === "private") return await sendOrder(order, channelName);
       try {
-        await axios.post(targetUrl, order, { headers: { "Content-Type": "application/json" }, timeout: 5000 });
+        const token = generateTimeToken();
+        await axios.post(`${targetUrl}?channel=${encodeURIComponent(channelName)}`, order, { headers: { "Content-Type": "application/json", "X-API-Token": token }, timeout: 5000 });
         return { success: true };
       } catch (err) {
         return { success: false, error: err.response?.data || err.message };

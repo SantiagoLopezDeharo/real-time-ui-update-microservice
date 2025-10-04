@@ -63,13 +63,17 @@ function question(prompt) {
 
   // Connect to WebSocket
   let ws;
+  // Ask for channel name
+  const chAns = await question("Channel name to subscribe (default): ");
+  const channel = chAns.trim() === '' ? 'default' : chAns.trim();
+
   if (mode === 'auth') {
     const token = generateToken();
-    ws = new WebSocket(`${config.wsUrl}?token=${token}`);
+    ws = new WebSocket(`${config.wsUrl}?token=${token}&channel=${encodeURIComponent(channel)}`);
   } else {
     // Use public ws endpoint
     const publicUrl = (config.wsUrl || 'ws://localhost:8080/ws').replace('/ws', '/ws/public');
-    ws = new WebSocket(publicUrl);
+    ws = new WebSocket(`${publicUrl}?channel=${encodeURIComponent(channel)}`);
   }
 
   setupWebSocket(ws);

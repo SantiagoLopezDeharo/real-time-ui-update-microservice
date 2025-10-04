@@ -13,31 +13,38 @@ type Client struct {
 	Send chan []byte
 	// Authenticated indicates whether this client connected via the authenticated WS endpoint
 	Authenticated bool
+	// Channel is the logical channel the client is subscribed to
+	Channel string
 }
 
 type Hub struct {
-	// Separate client collections for authenticated and public connections
-	authClients   map[*Client]bool
-	publicClients map[*Client]bool
+	// Separate client collections keyed by channel name
+	authChannels   map[string]map[*Client]bool
+	publicChannels map[string]map[*Client]bool
 
 	register   chan *Client
 	unregister chan *Client
 
 	// Separate broadcast channels
-	broadcastAuth   chan []byte
-	broadcastPublic chan []byte
+	broadcastAuth   chan broadcastMessage
+	broadcastPublic chan broadcastMessage
 
 	mu sync.RWMutex
 }
 
+type broadcastMessage struct {
+	Channel string
+	Message []byte
+}
+
 func NewHub() *Hub {
 	return &Hub{
-		authClients:     make(map[*Client]bool),
-		publicClients:   make(map[*Client]bool),
+		authChannels:    make(map[string]map[*Client]bool),
+		publicChannels:  make(map[string]map[*Client]bool),
 		register:        make(chan *Client),
 		unregister:      make(chan *Client),
-		broadcastAuth:   make(chan []byte),
-		broadcastPublic: make(chan []byte),
+		broadcastAuth:   make(chan broadcastMessage),
+		broadcastPublic: make(chan broadcastMessage),
 	}
 }
 
@@ -54,45 +61,66 @@ func (h *Hub) Run() {
 		case client := <-h.register:
 			h.mu.Lock()
 			if client.Authenticated {
-				h.authClients[client] = true
+				m, ok := h.authChannels[client.Channel]
+				if !ok {
+					m = make(map[*Client]bool)
+					h.authChannels[client.Channel] = m
+				}
+				m[client] = true
 			} else {
-				h.publicClients[client] = true
+				m, ok := h.publicChannels[client.Channel]
+				if !ok {
+					m = make(map[*Client]bool)
+					h.publicChannels[client.Channel] = m
+				}
+				m[client] = true
 			}
 			h.mu.Unlock()
-			log.Printf("Client registered. Authenticated: %t, Totals - auth: %d public: %d", client.Authenticated, len(h.authClients), len(h.publicClients))
+			log.Printf("Client registered. Authenticated: %t, Channel: %s", client.Authenticated, client.Channel)
 
 		case client := <-h.unregister:
 			h.mu.Lock()
 			if client.Authenticated {
-				if _, ok := h.authClients[client]; ok {
-					delete(h.authClients, client)
-					close(client.Send)
+				if m, ok := h.authChannels[client.Channel]; ok {
+					if _, ok2 := m[client]; ok2 {
+						delete(m, client)
+						close(client.Send)
+						if len(m) == 0 {
+							delete(h.authChannels, client.Channel)
+						}
+					}
 				}
 			} else {
-				if _, ok := h.publicClients[client]; ok {
-					delete(h.publicClients, client)
-					close(client.Send)
+				if m, ok := h.publicChannels[client.Channel]; ok {
+					if _, ok2 := m[client]; ok2 {
+						delete(m, client)
+						close(client.Send)
+						if len(m) == 0 {
+							delete(h.publicChannels, client.Channel)
+						}
+					}
 				}
 			}
 			h.mu.Unlock()
-			log.Printf("Client unregistered. Authenticated: %t, Totals - auth: %d public: %d", client.Authenticated, len(h.authClients), len(h.publicClients))
+			log.Printf("Client unregistered. Authenticated: %t, Channel: %s", client.Authenticated, client.Channel)
 
-		case message := <-h.broadcastAuth:
+		case bm := <-h.broadcastAuth:
 			h.mu.RLock()
-			clients := make([]*Client, 0, len(h.authClients))
-			for client := range h.authClients {
+			clientsMap := h.authChannels[bm.Channel]
+			clients := make([]*Client, 0, len(clientsMap))
+			for client := range clientsMap {
 				clients = append(clients, client)
 			}
 			h.mu.RUnlock()
 
 			for _, client := range clients {
 				select {
-				case client.Send <- message:
+				case client.Send <- bm.Message:
 					// sent
 				default:
 					go func(c *Client) {
 						select {
-						case c.Send <- message:
+						case c.Send <- bm.Message:
 							// sent
 						case <-time.After(5 * time.Second):
 							h.unregister <- c
@@ -103,22 +131,23 @@ func (h *Hub) Run() {
 				}
 			}
 
-		case message := <-h.broadcastPublic:
+		case bm := <-h.broadcastPublic:
 			h.mu.RLock()
-			clients := make([]*Client, 0, len(h.publicClients))
-			for client := range h.publicClients {
+			clientsMap := h.publicChannels[bm.Channel]
+			clients := make([]*Client, 0, len(clientsMap))
+			for client := range clientsMap {
 				clients = append(clients, client)
 			}
 			h.mu.RUnlock()
 
 			for _, client := range clients {
 				select {
-				case client.Send <- message:
+				case client.Send <- bm.Message:
 					// sent
 				default:
 					go func(c *Client) {
 						select {
-						case c.Send <- message:
+						case c.Send <- bm.Message:
 							// sent
 						case <-time.After(5 * time.Second):
 							h.unregister <- c
@@ -141,13 +170,14 @@ func (h *Hub) UnregisterClient(client *Client) {
 }
 
 // BroadcastToAuthenticated sends a message to authenticated websocket clients only
-func (h *Hub) BroadcastToAuthenticated(message []byte) {
-	h.broadcastAuth <- message
+// BroadcastToAuthenticated sends a message to authenticated websocket clients for a channel
+func (h *Hub) BroadcastToAuthenticated(channel string, message []byte) {
+	h.broadcastAuth <- broadcastMessage{Channel: channel, Message: message}
 }
 
-// BroadcastToPublic sends a message to public websocket clients only
-func (h *Hub) BroadcastToPublic(message []byte) {
-	h.broadcastPublic <- message
+// BroadcastToPublic sends a message to public websocket clients for a channel
+func (h *Hub) BroadcastToPublic(channel string, message []byte) {
+	h.broadcastPublic <- broadcastMessage{Channel: channel, Message: message}
 }
 
 // Exported pump methods so other packages (handlers) can start them:

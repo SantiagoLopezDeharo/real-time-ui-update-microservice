@@ -96,10 +96,69 @@ cd demo-tools/backend-simulator && npm i && npm start
 
 Now you should be able to test and demo the microservice in action and see real time event driven updates on the frontend-cli example program.
 
+# Usage
+
+This section shows the production endpoints and the parameters a backend or client must provide to publish and receive channel-scoped updates.
+
+### Backend -> Microservice (publish an update)
+
+- Endpoint (private backend update):
+	- POST /update?channel=<channel-name>
+	- Headers:
+		- X-API-Token: <time-token> (required) — the time-based token generated using the shared secret
+		- Content-Type: application/json
+	- Body: arbitrary JSON payload that will be broadcast to clients subscribed to the channel
+
+- Endpoint (publish to public clients):
+	- POST /publish?channel=<channel-name>
+	- Headers: same as above (the endpoint is protected with the same time-token middleware so the request must originate from your backend)
+	- Body: arbitrary JSON payload
+
+Example curl (publish to channel "news"):
+
+```bash
+curl -X POST 'http://localhost:8080/publish?channel=news' \
+	-H 'Content-Type: application/json' \
+	-H 'X-API-Token: <TIME_TOKEN>' \
+	-d '{"id":"order-123","item":"Demo","amount":10}'
+```
+
+Notes:
+- The `channel` query parameter is optional; if omitted the server uses the `default` channel.
+- The time-based token must be created by your backend using the shared secret (see `cmd/internal/auth/timetoken.go` and the demo backend simulator for a reference implementation).
+
+### Client -> Microservice (subscribe to a channel)
+
+- Authenticated client (user-specific):
+	- WebSocket endpoint: `wss://<host>/ws?token=<JWT>&channel=<channel-name>`
+	- The JWT token authenticates the user and the client will be added to the *authenticated* channel collection.
+
+- Public client (no JWT):
+	- WebSocket endpoint: `wss://<host>/ws/public?channel=<channel-name>`
+	- No JWT required; the client will be added to the *public* channel collection.
+
+Examples (browser / CLI WebSocket):
+
+Authenticated (private channel "internal"):
+```js
+// Example URL (JS)
+const ws = new WebSocket('wss://example.com/ws?token=JWT_HERE&channel=internal');
+```
+
+Public (public channel "news"):
+```js
+const ws = new WebSocket('wss://example.com/ws/public?channel=news');
+```
+
+Behavior summary:
+- Clients subscribing with the same `channel` string will only receive messages published to that channel.
+- Authenticated and public clients are isolated: authenticated broadcasts (from `/update`) only go to authenticated clients on that channel; public broadcasts (from `/publish`) only go to public clients on that channel.
+
+If you use the demo tools, the frontend CLI and backend simulator expose these channel options interactively so you can test different channel configurations quickly.
+
+
+
 ### Disclaimer
 This project is licensed under the GNU General Public License v3.0. For more details, see the LICENSE file in the repository.
-
-
-
 
 

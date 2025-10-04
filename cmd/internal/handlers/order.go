@@ -28,8 +28,14 @@ func HandleOrderUpdate(h *hub.Hub) http.HandlerFunc {
 			return
 		}
 
+		// Determine channel to broadcast to (default to "default")
+		ch := r.URL.Query().Get("channel")
+		if ch == "" {
+			ch = "default"
+		}
+
 		// Broadcast the raw JSON to authenticated clients (used by backend)
-		h.BroadcastToAuthenticated(body)
+		h.BroadcastToAuthenticated(ch, body)
 		w.WriteHeader(http.StatusAccepted)
 	}
 }
@@ -52,8 +58,14 @@ func HandleOrderPublish(h *hub.Hub) http.HandlerFunc {
 			return
 		}
 
+		// Determine channel (default to "default")
+		ch := r.URL.Query().Get("channel")
+		if ch == "" {
+			ch = "default"
+		}
+
 		// Broadcast to public clients
-		h.BroadcastToPublic(body)
+		h.BroadcastToPublic(ch, body)
 		w.WriteHeader(http.StatusAccepted)
 	}
 }

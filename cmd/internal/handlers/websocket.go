@@ -23,8 +23,15 @@ func HandleWebSocket(h *hub.Hub) http.HandlerFunc {
 
 		client := hub.NewClient(conn)
 
+		// Determine channel from query parameter (default to "default")
+		ch := r.URL.Query().Get("channel")
+		if ch == "" {
+			ch = "default"
+		}
+
 		// Mark as authenticated since this handler is wrapped by JWT middleware
 		client.Authenticated = true
+		client.Channel = ch
 
 		h.RegisterClient(client)
 
@@ -44,7 +51,13 @@ func HandleWebSocketPublic(h *hub.Hub) http.HandlerFunc {
 		}
 
 		client := hub.NewClient(conn)
+		// Determine channel from query parameter (default to "default")
+		ch := r.URL.Query().Get("channel")
+		if ch == "" {
+			ch = "default"
+		}
 		client.Authenticated = false
+		client.Channel = ch
 		h.RegisterClient(client)
 
 		go client.WritePump()
