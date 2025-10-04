@@ -221,7 +221,6 @@ func (c *Client) ReadPump(h *Hub) {
 			break
 		}
 
-		// Optional: Log received messages for debugging
 		log.Printf("Received message: %s", string(message))
 	}
 }
