@@ -27,8 +27,15 @@ func main() {
 	// WebSocket endpoint with JWT auth
 	r.Handle("/ws", auth.Middleware(handlers.HandleWebSocket(h)))
 
+	// Public WebSocket endpoint (no JWT required)
+	r.Handle("/ws/public", handlers.HandleWebSocketPublic(h))
+
 	// Order update endpoint with time-based token authentication
 	r.Handle("/update", auth.TimeTokenMiddleware(handlers.HandleOrderUpdate(h))).Methods("POST")
+
+	// Public HTTP endpoint for clients that do not require authentication
+	// Note: backend should continue to use /update (protected by time token).
+	r.Handle("/publish", handlers.HandleOrderPublish(h)).Methods("POST")
 
 	log.Printf("Server starting on :%s", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, r))

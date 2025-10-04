@@ -28,11 +28,36 @@ func HandleOrderUpdate(h *hub.Hub) http.HandlerFunc {
 			return
 		}
 
-		// Broadcast the raw JSON to all connected clients
-		h.BroadcastMessage(body)
+		// Broadcast the raw JSON to authenticated clients (used by backend)
+		h.BroadcastToAuthenticated(body)
 		w.WriteHeader(http.StatusAccepted)
 	}
 }
+
+	// HandleOrderPublish is a public endpoint that broadcasts updates to public (unauthenticated) clients
+	func HandleOrderPublish(h *hub.Hub) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "Error reading body", http.StatusBadRequest)
+				return
+			}
+
+			if !isValidJSON(body) {
+				http.Error(w, "Invalid JSON", http.StatusBadRequest)
+				return
+			}
+
+			// Broadcast to public clients
+			h.BroadcastToPublic(body)
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}
 
 // isValidJSON checks if the byte slice contains valid JSON
 func isValidJSON(data []byte) bool {

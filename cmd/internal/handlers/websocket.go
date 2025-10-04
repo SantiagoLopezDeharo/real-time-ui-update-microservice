@@ -23,9 +23,30 @@ func HandleWebSocket(h *hub.Hub) http.HandlerFunc {
 
 		client := hub.NewClient(conn)
 
+		// Mark as authenticated since this handler is wrapped by JWT middleware
+		client.Authenticated = true
+
 		h.RegisterClient(client)
 
 		// Start goroutines for reading and writing (exported methods on hub.Client)
+		go client.WritePump()
+		go client.ReadPump(h)
+	}
+}
+
+// HandleWebSocketPublic returns a websocket handler that registers clients as public (unauthenticated)
+func HandleWebSocketPublic(h *hub.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Println("WebSocket upgrade error:", err)
+			return
+		}
+
+		client := hub.NewClient(conn)
+		client.Authenticated = false
+		h.RegisterClient(client)
+
 		go client.WritePump()
 		go client.ReadPump(h)
 	}

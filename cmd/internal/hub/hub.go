@@ -11,22 +11,33 @@ import (
 type Client struct {
 	Conn *websocket.Conn
 	Send chan []byte
+	// Authenticated indicates whether this client connected via the authenticated WS endpoint
+	Authenticated bool
 }
 
 type Hub struct {
-	clients    map[*Client]bool
+	// Separate client collections for authenticated and public connections
+	authClients   map[*Client]bool
+	publicClients map[*Client]bool
+
 	register   chan *Client
 	unregister chan *Client
-	broadcast  chan []byte
-	mu         sync.RWMutex
+
+	// Separate broadcast channels
+	broadcastAuth   chan []byte
+	broadcastPublic chan []byte
+
+	mu sync.RWMutex
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		clients:    make(map[*Client]bool),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		broadcast:  make(chan []byte),
+		authClients:     make(map[*Client]bool),
+		publicClients:   make(map[*Client]bool),
+		register:        make(chan *Client),
+		unregister:      make(chan *Client),
+		broadcastAuth:   make(chan []byte),
+		broadcastPublic: make(chan []byte),
 	}
 }
 
@@ -42,23 +53,60 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.register:
 			h.mu.Lock()
-			h.clients[client] = true
+			if client.Authenticated {
+				h.authClients[client] = true
+			} else {
+				h.publicClients[client] = true
+			}
 			h.mu.Unlock()
-			log.Printf("Client registered. Total clients: %d", len(h.clients))
+			log.Printf("Client registered. Authenticated: %t, Totals - auth: %d public: %d", client.Authenticated, len(h.authClients), len(h.publicClients))
 
 		case client := <-h.unregister:
 			h.mu.Lock()
-			if _, ok := h.clients[client]; ok {
-				delete(h.clients, client)
-				close(client.Send)
+			if client.Authenticated {
+				if _, ok := h.authClients[client]; ok {
+					delete(h.authClients, client)
+					close(client.Send)
+				}
+			} else {
+				if _, ok := h.publicClients[client]; ok {
+					delete(h.publicClients, client)
+					close(client.Send)
+				}
 			}
 			h.mu.Unlock()
-			log.Printf("Client unregistered. Total clients: %d", len(h.clients))
+			log.Printf("Client unregistered. Authenticated: %t, Totals - auth: %d public: %d", client.Authenticated, len(h.authClients), len(h.publicClients))
 
-		case message := <-h.broadcast:
+		case message := <-h.broadcastAuth:
 			h.mu.RLock()
-			clients := make([]*Client, 0, len(h.clients))
-			for client := range h.clients {
+			clients := make([]*Client, 0, len(h.authClients))
+			for client := range h.authClients {
+				clients = append(clients, client)
+			}
+			h.mu.RUnlock()
+
+			for _, client := range clients {
+				select {
+				case client.Send <- message:
+					// sent
+				default:
+					go func(c *Client) {
+						select {
+						case c.Send <- message:
+							// sent
+						case <-time.After(5 * time.Second):
+							h.unregister <- c
+							c.Conn.Close()
+							log.Println("Disconnected slow client")
+						}
+					}(client)
+				}
+			}
+
+		case message := <-h.broadcastPublic:
+			h.mu.RLock()
+			clients := make([]*Client, 0, len(h.publicClients))
+			for client := range h.publicClients {
 				clients = append(clients, client)
 			}
 			h.mu.RUnlock()
@@ -92,8 +140,14 @@ func (h *Hub) UnregisterClient(client *Client) {
 	h.unregister <- client
 }
 
-func (h *Hub) BroadcastMessage(message []byte) {
-	h.broadcast <- message
+// BroadcastToAuthenticated sends a message to authenticated websocket clients only
+func (h *Hub) BroadcastToAuthenticated(message []byte) {
+	h.broadcastAuth <- message
+}
+
+// BroadcastToPublic sends a message to public websocket clients only
+func (h *Hub) BroadcastToPublic(message []byte) {
+	h.broadcastPublic <- message
 }
 
 // Exported pump methods so other packages (handlers) can start them:

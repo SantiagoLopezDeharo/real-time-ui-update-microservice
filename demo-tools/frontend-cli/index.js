@@ -39,18 +39,49 @@ const ordersTable = new Table({
 // Clear console and display header
 console.clear();
 console.log(chalk.green.bold("📦 Real-Time Order Updates Demo"));
-console.log(chalk.gray("Connecting to WebSocket server...\n"));
 
-// Connect to WebSocket
-const token = generateToken();
-const ws = new WebSocket(`${config.wsUrl}?token=${token}`);
+// Ask whether to connect authenticated or public (use readline to avoid depending on inquirer)
+const readline = require('readline');
 
-ws.on("open", function open() {
-  console.log(chalk.green("✅ Connected to WebSocket server"));
-  console.log(chalk.gray("Waiting for order updates...\n"));
-});
+function question(prompt) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(prompt, (answer) => {
+      rl.close();
+      resolve(answer);
+    });
+  });
+}
 
-ws.on("message", function message(data) {
+(async function chooseAndConnect() {
+  console.log(chalk.gray("Connecting to WebSocket server...\n"));
+
+  console.log("1) Authenticated (private channel) - requires JWT token");
+  console.log("2) Public (no auth)");
+  const ans = await question("Choose connection mode (1=auth, 2=public) [1]: ");
+  const mode = ans.trim() === '2' ? 'public' : 'auth';
+
+  // Connect to WebSocket
+  let ws;
+  if (mode === 'auth') {
+    const token = generateToken();
+    ws = new WebSocket(`${config.wsUrl}?token=${token}`);
+  } else {
+    // Use public ws endpoint
+    const publicUrl = (config.wsUrl || 'ws://localhost:8080/ws').replace('/ws', '/ws/public');
+    ws = new WebSocket(publicUrl);
+  }
+
+  setupWebSocket(ws);
+})();
+
+function setupWebSocket(ws) {
+  ws.on("open", function open() {
+    console.log(chalk.green("✅ Connected to WebSocket server"));
+    console.log(chalk.gray("Waiting for order updates...\n"));
+  });
+
+  ws.on("message", function message(data) {
   try {
     const order = JSON.parse(data);
     const timestamp = new Date().toLocaleTimeString();
@@ -67,19 +98,21 @@ ws.on("message", function message(data) {
   } catch (error) {
     console.error("Error parsing message:", error);
   }
-});
+  });
 
-ws.on("error", function error(err) {
-  console.error(chalk.red("WebSocket error:"), err.message);
-});
+  ws.on("error", function error(err) {
+    console.error(chalk.red("WebSocket error:"), err.message);
+  });
 
-ws.on("close", function close() {
-  console.log(chalk.yellow("WebSocket connection closed"));
-});
+  ws.on("close", function close() {
+    console.log(chalk.yellow("WebSocket connection closed"));
+  });
 
-// Handle graceful shutdown
-process.on("SIGINT", function () {
-  console.log(chalk.yellow("\nShutting down..."));
-  ws.close();
-  process.exit();
-});
+  // Handle graceful shutdown
+  process.on("SIGINT", function () {
+    console.log(chalk.yellow("\nShutting down..."));
+    try { ws.close(); } catch (e) {}
+    process.exit();
+  });
+
+}

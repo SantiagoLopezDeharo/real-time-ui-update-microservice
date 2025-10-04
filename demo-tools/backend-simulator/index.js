@@ -10,6 +10,7 @@ require("dotenv").config({ path: path.resolve(__dirname, ".env") });
 // Configuration
 const config = {
   apiUrl: process.env.API_URL || "http://localhost:8080/update",
+  publishUrl: process.env.PUBLISH_URL || "http://localhost:8080/publish",
   timeTokenSecret: process.env.TIME_TOKEN_SECRET || "your-time-token-secret",
   timeWindow: parseInt(process.env.TIME_WINDOW_SECONDS) || 3600,
 };
@@ -120,6 +121,22 @@ async function showMenu() {
     process.exit(0);
   }
 
+  // Ask which channel to use for publishing (private = /update, public = /publish)
+  const { channel } = await inquirer.prompt([
+    {
+      type: "list",
+      name: "channel",
+      message: "Select channel to publish to:",
+      choices: [
+        { name: "Private (backend) - requires time token", value: "private" },
+        { name: "Public - no authentication", value: "public" },
+      ],
+      default: "private",
+    },
+  ]);
+
+  const targetUrl = channel === "private" ? config.apiUrl : config.publishUrl;
+
   if (action === "single") {
     const answers = await inquirer.prompt([
       {
@@ -142,7 +159,16 @@ async function showMenu() {
       },
     ]);
 
-    const result = await sendOrder(answers);
+    const result = await (async () => {
+      if (channel === "private") return await sendOrder(answers);
+      // Public: POST without token to publishUrl
+      try {
+        await axios.post(targetUrl, answers, { headers: { "Content-Type": "application/json" }, timeout: 5000 });
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.response?.data || err.message };
+      }
+    })();
 
     if (result.success) {
       console.log(chalk.green("✅ Order sent successfully!"));
@@ -168,7 +194,15 @@ async function showMenu() {
 
     for (let i = 1; i <= count; i++) {
       const order = generateRandomOrder();
-      const result = await sendOrder(order);
+      const result = await (async () => {
+        if (channel === "private") return await sendOrder(order);
+        try {
+          await axios.post(targetUrl, order, { headers: { "Content-Type": "application/json" }, timeout: 5000 });
+          return { success: true };
+        } catch (err) {
+          return { success: false, error: err.response?.data || err.message };
+        }
+      })();
 
       if (result.success) {
         console.log(
@@ -193,7 +227,15 @@ async function showMenu() {
     const order = generateRandomOrder();
     console.log(chalk.blue("Generated order:"), order);
 
-    const result = await sendOrder(order);
+    const result = await (async () => {
+      if (channel === "private") return await sendOrder(order);
+      try {
+        await axios.post(targetUrl, order, { headers: { "Content-Type": "application/json" }, timeout: 5000 });
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.response?.data || err.message };
+      }
+    })();
 
     if (result.success) {
       console.log(chalk.green("✅ Random order sent successfully!"));
