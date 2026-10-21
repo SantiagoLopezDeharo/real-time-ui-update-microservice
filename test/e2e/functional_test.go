@@ -364,3 +364,75 @@ func TestStartupFailsWhenPortIsTaken(t *testing.T) {
 		t.Errorf("exit = %v logs:\n%s", s.exitErr, s.logs)
 	}
 }
+
+func TestUserChannelsDeliverOnlyToTheirOwner(t *testing.T) {
+	s := startServer(t)
+	aliceTabs := []*user{
+		s.connectAs(t, "alice", "user:alice"),
+		s.connectAs(t, "alice", "user:alice"),
+		s.connectAs(t, "alice", "user:alice"),
+	}
+	bob := s.connectAs(t, "bob", "user:bob")
+	aliceShared := s.connectAs(t, "alice", "orders")
+	bobShared := s.connectAs(t, "bob", "orders")
+	everyone := append([]*user{bob, aliceShared, bobShared}, aliceTabs...)
+	s.awaitSubscribed(t, everyone...)
+
+	s.mustPublish(t, private, "user:alice", []byte(`{"for":"alice"}`))
+	for _, tab := range aliceTabs {
+		if got := string(tab.next(t, deliveryTimeout)); got != `{"for":"alice"}` {
+			t.Errorf("alice tab got %s", got)
+		}
+	}
+	s.mustPublish(t, private, "user:bob", []byte(`{"for":"bob"}`))
+	if got := string(bob.next(t, deliveryTimeout)); got != `{"for":"bob"}` {
+		t.Errorf("bob got %s", got)
+	}
+	s.mustPublish(t, private, "orders", []byte(`{"for":"everyone"}`))
+	for _, u := range []*user{aliceShared, bobShared} {
+		if got := string(u.next(t, deliveryTimeout)); got != `{"for":"everyone"}` {
+			t.Errorf("shared subscriber got %s", got)
+		}
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	for _, u := range everyone {
+		u.expectNothing(t, 0)
+	}
+}
+
+func TestUserIDsAreOpaque(t *testing.T) {
+	s := startServer(t)
+	ids := []string{
+		"a",
+		"a:b",
+		"a:b:c",
+		"auth0|5f7c8ec7c33c6c004bbafe82",
+		"google-oauth2|103547991597142817347",
+		"user@example.com",
+		"550e8400-e29b-41d4-a716-446655440000",
+		"with space",
+		"日本語",
+		"emoji-🚀",
+		"amp&ersand=1",
+		"user:nested",
+		"Alice",
+		"alice",
+		strings.Repeat("long", 200),
+	}
+	users := make([]*user, len(ids))
+	for i, id := range ids {
+		users[i] = s.connectAs(t, id, "user:"+id)
+	}
+	s.awaitSubscribed(t, users...)
+
+	for i, id := range ids {
+		s.mustPublish(t, private, "user:"+id, message(map[string]any{"i": i}))
+	}
+	for i, u := range users {
+		if got := decode[struct{ I int }](t, u.next(t, deliveryTimeout)); got.I != i {
+			t.Errorf("user %.40q received the message for user %.40q", ids[i], ids[got.I])
+		}
+		u.expectNothing(t, 50*time.Millisecond)
+	}
+}

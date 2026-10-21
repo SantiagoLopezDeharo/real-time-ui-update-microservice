@@ -88,6 +88,52 @@ func TestPublishChannelSelection(t *testing.T) {
 	}
 }
 
+func TestPublishUserChannels(t *testing.T) {
+	tests := []struct {
+		scope   hub.Scope
+		target  string
+		want    int
+		channel string
+	}{
+		{hub.Private, "/update?channel=user:42", http.StatusAccepted, "user:42"},
+		{hub.Private, "/update?channel=user%3A42", http.StatusAccepted, "user:42"},
+		{hub.Private, "/update?channel=user:auth0%7Ca:b", http.StatusAccepted, "user:auth0|a:b"},
+		{hub.Public, "/publish?channel=user:42", http.StatusBadRequest, ""},
+		{hub.Public, "/publish?channel=user%3A42", http.StatusBadRequest, ""},
+		{hub.Public, "/publish?channel=user:", http.StatusBadRequest, ""},
+		{hub.Public, "/publish?channel=User:42", http.StatusAccepted, "User:42"},
+		{hub.Public, "/publish?channel=users:42", http.StatusAccepted, "users:42"},
+	}
+	for _, tt := range tests {
+		b := &fakeBroadcaster{}
+		rec := publish(b, tt.scope, 1<<20, tt.target, strings.NewReader(`{"n":1}`))
+		if rec.Code != tt.want {
+			t.Errorf("%s: status = %d, want %d", tt.target, rec.Code, tt.want)
+			continue
+		}
+		if tt.want != http.StatusAccepted {
+			if len(b.calls) != 0 {
+				t.Errorf("%s: rejected publish was broadcast: %+v", tt.target, b.calls)
+			}
+			if !strings.Contains(rec.Body.String(), "User channels") {
+				t.Errorf("%s: response %q does not explain the rejection", tt.target, rec.Body.String())
+			}
+			continue
+		}
+		if len(b.calls) != 1 || b.calls[0].channel != tt.channel {
+			t.Errorf("%s: calls = %+v, want channel %q", tt.target, b.calls, tt.channel)
+		}
+	}
+}
+
+func TestPublishRejectsUserChannelBeforeReadingBody(t *testing.T) {
+	b := &fakeBroadcaster{}
+	rec := publish(b, hub.Public, 64, "/publish?channel=user:42", io.LimitReader(infiniteReader{}, 10<<20))
+	if rec.Code != http.StatusBadRequest || len(b.calls) != 0 {
+		t.Errorf("status = %d, calls = %d; want 400 without broadcast", rec.Code, len(b.calls))
+	}
+}
+
 func TestPublishRejectsInvalidJSON(t *testing.T) {
 	bodies := []string{
 		"",

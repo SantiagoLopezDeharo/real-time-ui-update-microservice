@@ -5,6 +5,8 @@ import (
 	"slices"
 	"sync"
 
+	"real-time-ui-update-microservice/internal/access"
+	"real-time-ui-update-microservice/internal/auth"
 	"real-time-ui-update-microservice/internal/hub"
 
 	"github.com/gorilla/websocket"
@@ -14,13 +16,22 @@ type Server interface {
 	Serve(conn *websocket.Conn, scope hub.Scope, channel string)
 }
 
+// Subscribe checks channel access before upgrading, so a denied client gets a
+// plain 403 and never holds a connection.
 func Subscribe(s Server, scope hub.Scope, upgrader *websocket.Upgrader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		channel := channelFrom(r)
+		userID, _ := auth.UserID(r.Context())
+		if !access.CanSubscribe(channel, userID) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
-		s.Serve(conn, scope, channelFrom(r))
+		s.Serve(conn, scope, channel)
 	}
 }
 

@@ -454,3 +454,109 @@ func rawRequest(t *testing.T, s *server, request string) string {
 	line, _ := bufio.NewReader(conn).ReadString('\n')
 	return line
 }
+
+func TestUserChannelRejectsEveryoneButItsOwner(t *testing.T) {
+	s := startServer(t)
+	alice := s.connectAs(t, "alice", "user:alice")
+	s.awaitSubscribed(t, alice)
+	key := []byte(s.jwtSecret)
+	bobParts := strings.Split(s.userJWT(t, "bob"), ".")
+
+	forbidden := map[string]struct {
+		sc    scope
+		token string
+	}{
+		"other user":             {private, s.userJWT(t, "bob")},
+		"case variant":           {private, s.userJWT(t, "Alice")},
+		"padded subject":         {private, s.userJWT(t, "alice ")},
+		"prefixed subject":       {private, s.userJWT(t, "user:alice")},
+		"subject prefix":         {private, s.userJWT(t, "ali")},
+		"subject extension":      {private, s.userJWT(t, "alice:admin")},
+		"empty subject":          {private, s.userJWT(t, "")},
+		"missing subject":        {private, signJWT(t, jwt.SigningMethodHS256, key, jwt.MapClaims{"name": "alice"})},
+		"subject in other claim": {private, signJWT(t, jwt.SigningMethodHS256, key, jwt.MapClaims{"sub": "bob", "user": "alice", "uid": "alice"})},
+		"public endpoint":        {public, ""},
+		"public with owner jwt":  {public, s.userJWT(t, "alice")},
+	}
+	for name, tt := range forbidden {
+		t.Run(name, func(t *testing.T) {
+			res := s.refused(t, tt.sc, "user:alice", tt.token)
+			if res.status != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", res.status)
+			}
+			if strings.Contains(res.body, "alice") || strings.Contains(res.body, "bob") {
+				t.Errorf("response reveals user ids: %q", res.body)
+			}
+			assertNoLeak(t, s, res.body)
+		})
+	}
+
+	unauthenticated := map[string]string{
+		"no token":          "",
+		"forged subject":    bobParts[0] + "." + base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"alice"}`)) + "." + bobParts[2],
+		"alg none":          signJWT(t, jwt.SigningMethodNone, jwt.UnsafeAllowNoneSignatureType, jwt.MapClaims{"sub": "alice"}),
+		"wrong secret":      signJWT(t, jwt.SigningMethodHS256, []byte("guess"), jwt.MapClaims{"sub": "alice"}),
+		"expired owner jwt": signJWT(t, jwt.SigningMethodHS256, key, jwt.MapClaims{"sub": "alice", "exp": time.Now().Add(-time.Second).Unix()}),
+	}
+	for name, token := range unauthenticated {
+		t.Run(name, func(t *testing.T) {
+			if res := s.refused(t, private, "user:alice", token); res.status != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", res.status)
+			}
+		})
+	}
+
+	s.mustPublish(t, private, "user:alice", []byte(`{"secret":1}`))
+	if got := string(alice.next(t, deliveryTimeout)); got != `{"secret":1}` {
+		t.Fatalf("owner got %s", got)
+	}
+	alice.expectNothing(t, 100*time.Millisecond)
+}
+
+func TestChannelParameterPollutionCannotJoinAnotherUsersChannel(t *testing.T) {
+	s := startServer(t)
+	alice := s.connectAs(t, "alice", "user:alice")
+	bobToken := s.userJWT(t, "bob")
+
+	smuggled := "/ws?" + url.Values{"token": {bobToken}, "channel": {"user:bob", "user:alice"}}.Encode()
+	conn, _, err := websocket.DefaultDialer.Dial(s.wsURL+smuggled, nil)
+	if err != nil {
+		t.Fatalf("bob's own channel listed first was refused: %v", err)
+	}
+	bob := newUser(t, private, "user:bob", conn)
+	s.awaitSubscribed(t, alice, bob)
+
+	reversed := "/ws?" + url.Values{"token": {bobToken}, "channel": {"user:alice", "user:bob"}}.Encode()
+	if _, resp, err := websocket.DefaultDialer.Dial(s.wsURL+reversed, nil); err == nil || statusOf(resp) != http.StatusForbidden {
+		t.Fatalf("alice's channel listed first: err = %v, status = %d; want 403", err, statusOf(resp))
+	}
+	for _, target := range []string{
+		"/ws?token=" + bobToken + "&channel=user%3Aalice",
+		"/ws?token=" + bobToken + "&channel=user:alice%00",
+		"/ws?token=" + bobToken + "&channel=user:alice&channel=user:bob",
+		"/ws?token=" + bobToken + "&channel=%75ser:alice",
+	} {
+		if _, resp, err := websocket.DefaultDialer.Dial(s.wsURL+target, nil); err == nil || statusOf(resp) != http.StatusForbidden {
+			t.Errorf("%s: err = %v, status = %d; want 403", target, err, statusOf(resp))
+		}
+	}
+
+	s.mustPublish(t, private, "user:alice", []byte(`{"for":"alice"}`))
+	if got := string(alice.next(t, deliveryTimeout)); got != `{"for":"alice"}` {
+		t.Fatalf("alice got %s", got)
+	}
+	bob.expectNothing(t, 300*time.Millisecond)
+}
+
+func TestPublicPublishToUserChannelIsRejected(t *testing.T) {
+	s := startServer(t)
+	alice := s.connectAs(t, "alice", "user:alice")
+	s.awaitSubscribed(t, alice)
+
+	for _, channel := range []string{"user:alice", "user:"} {
+		if status := s.publish(t, public, channel, []byte(`{"leak":true}`)); status != http.StatusBadRequest {
+			t.Errorf("/publish to %q: status = %d, want 400", channel, status)
+		}
+	}
+	alice.expectNothing(t, 300*time.Millisecond)
+}

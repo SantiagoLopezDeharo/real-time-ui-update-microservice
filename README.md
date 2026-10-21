@@ -18,6 +18,7 @@ In this repo I provide a "Plug and play" Golang microservice that would mitigate
 - Time-based passwords prevent that if a used token gets compromised, after a configurable time window it will stop being valid
 - HTTPS encryption for all service-to-service communication
 - WebSocket connections secured with WSS protocol + JWT for user authentication.
+- Per-user channels: a `user:<id>` channel only accepts the user whose JWT subject is `<id>`, so the backend can push messages meant for a single user.
 
 
 ## 💡 How It Works
@@ -95,6 +96,7 @@ cd demo-tools/backend-simulator && npm i && npm start
 ```
 
 Now you should be able to test and demo the microservice in action and see real time event driven updates on the frontend-cli example program.
+To try a [user channel](#user-channels), pick the authenticated mode in the frontend CLI and subscribe to `user:demo-user-123` (the `USER_ID` it signs into its JWT), then publish to the same channel from the backend simulator.
 
 # 🐳 Docker
 
@@ -172,6 +174,7 @@ curl -X POST 'http://localhost:8080/publish?channel=news' \
 
 Notes:
 - The `channel` query parameter is optional; if omitted the server uses the `default` channel.
+- `/publish` rejects user channels (`user:<id>`) with `400`, since public clients can never subscribe to them; publish user messages through `/update`.
 - The time-based token must be created by your backend using the shared secret (see `internal/auth/timetoken.go` and the demo backend simulator for a reference implementation).
 
 ### Client -> Microservice (subscribe to a channel)
@@ -197,6 +200,32 @@ Public (public channel "news"):
 const ws = new WebSocket('wss://example.com/ws/public?channel=news');
 ```
 
+### User channels
+
+Channels prefixed with `user:` belong to a single user. The rest of the name is the user id and must equal the JWT `sub` claim exactly (case-sensitive, no normalization):
+
+| Channel | Who may subscribe |
+|---------|-------------------|
+| `orders`, `default`, … | any client of the scope (authenticated on `/ws`, anyone on `/ws/public`) |
+| `user:42` | only `/ws` clients whose JWT `sub` is `42` |
+
+```js
+// Browser of user 42 (JWT sub = "42"), one socket per tab is fine
+const ws = new WebSocket('wss://example.com/ws?token=JWT_HERE&channel=user:42');
+```
+
+```bash
+# Backend: notify user 42 only
+curl -X POST 'http://localhost:8080/update?channel=user:42' \
+	-H 'Content-Type: application/json' \
+	-H 'X-API-Token: <TIME_TOKEN>' \
+	-d '{"type":"invoice.paid","invoice":"inv-981"}'
+```
+
+- Any other user, a token without `sub`, and every `/ws/public` client get `403` before the WebSocket upgrade, so a denied client never holds a connection. Missing or invalid JWTs still get `401`.
+- The match is on the whole id, so ids containing `:`, `|` or `@` (e.g. `auth0|5f7c…`) are safe: user `a` cannot join `user:a:b`. Put the message kind in the payload rather than in sub-channels.
+- If the `channel` parameter is repeated, the first value is both checked and subscribed.
+
 Behavior summary:
 - Clients subscribing with the same `channel` string will only receive messages published to that channel.
 - Authenticated and public clients are isolated: authenticated broadcasts (from `/update`) only go to authenticated clients on that channel; public broadcasts (from `/publish`) only go to public clients on that channel.
@@ -218,11 +247,11 @@ make perf        # performance scenarios and optimization report
 make bench       # micro benchmarks
 ```
 
-- **Unit tests** cover every package, including time-token interoperability with the Node.js reference implementation, JWT algorithm-confusion attacks, body limits, origin policy, framing, ordering, ping/pong liveness, slow-consumer eviction and shutdown, plus a fuzz target for token parsing.
+- **Unit tests** cover every package, including time-token interoperability with the Node.js reference implementation, JWT algorithm-confusion attacks, body limits, origin policy, framing, ordering, ping/pong liveness, slow-consumer eviction, shutdown and user channel ownership, plus fuzz targets for token parsing and channel access.
 - **End-to-end tests** (`test/e2e`, build tag `e2e`) build the real binary with the race detector and coverage, boot it with throwaway secrets and drive it with simulated backends and browser users:
   - *functional*: fan-out, ordering, payload fidelity, channel and scope isolation, reconnects, graceful shutdown, configuration validation;
-  - *security*: forged/expired/replayed tokens, scope escalation, oversized bodies and headers, origin allowlist, WebSocket protocol violations, slowloris, connection floods with goroutine-leak detection, no secrets or internals in error responses;
-  - *concurrency*: concurrent publishers with exactly-once and per-publisher ordering checks, subscriber churn, slow consumers, shutdown under load. Any data race, panic or unclean exit reported by the server fails the run.
+  - *security*: forged/expired/replayed tokens, scope escalation, user channel access (other users, look-alike subjects, forged subjects, query parameter pollution, public endpoints), oversized bodies and headers, origin allowlist, WebSocket protocol violations, slowloris, connection floods with goroutine-leak detection, no secrets or internals in error responses;
+  - *concurrency*: concurrent publishers with exactly-once and per-publisher ordering checks, per-user delivery isolation while attackers hammer foreign user channels, subscriber churn, slow consumers, shutdown under load. Any data race, panic or unclean exit reported by the server fails the run.
 - **Performance suite** profiles the live server through pprof and writes `test/e2e/reports/perf-<label>.md` with latency percentiles, throughput, memory and goroutines per connection, CPU/allocation/heap hotspots and the optimization opportunities they point to. `E2E_BINARY` profiles another build and `E2E_PERF_BASELINE` adds a comparison column.
 
 # ⚡ Performance

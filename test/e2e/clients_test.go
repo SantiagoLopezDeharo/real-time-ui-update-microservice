@@ -157,12 +157,12 @@ func (s *server) tryConnect(t testing.TB, sc scope, channel string) (*user, erro
 	}
 	conn, resp, err := s.dial(sc, channel, jwtToken, nil)
 	if err != nil {
-		status := 0
-		if resp != nil {
-			status = resp.StatusCode
-		}
-		return nil, fmt.Errorf("connect %v %q: %w (status %d)", sc, channel, err, status)
+		return nil, fmt.Errorf("connect %v %q: %w (status %d)", sc, channel, err, statusOf(resp))
 	}
+	return newUser(t, sc, channel, conn), nil
+}
+
+func newUser(t testing.TB, sc scope, channel string, conn *websocket.Conn) *user {
 	u := &user{
 		scope:   sc,
 		channel: channel,
@@ -172,7 +172,39 @@ func (s *server) tryConnect(t testing.TB, sc scope, channel string) (*user, erro
 	}
 	go u.read()
 	t.Cleanup(func() { _ = u.conn.Close() })
-	return u, nil
+	return u
+}
+
+func statusOf(resp *http.Response) int {
+	if resp == nil {
+		return 0
+	}
+	return resp.StatusCode
+}
+
+// connectAs opens a private tab authenticated as userID.
+func (s *server) connectAs(t testing.TB, userID, channel string) *user {
+	t.Helper()
+	conn, resp, err := s.dial(private, channel, s.userJWT(t, userID), nil)
+	if err != nil {
+		t.Fatalf("connect to %q as %q: %v (status %d)", channel, userID, err, statusOf(resp))
+	}
+	return newUser(t, private, channel, conn)
+}
+
+// refused dials a handshake that must fail and returns the HTTP response.
+func (s *server) refused(t testing.TB, sc scope, channel, jwtToken string) response {
+	t.Helper()
+	conn, resp, err := s.dial(sc, channel, jwtToken, nil)
+	if err == nil {
+		_ = conn.Close()
+		t.Fatalf("handshake to %s %q succeeded", sc, channel)
+	}
+	if resp == nil {
+		t.Fatalf("handshake to %s %q: %v", sc, channel, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	return response{resp.StatusCode, string(body)}
 }
 
 func (s *server) connect(t testing.TB, sc scope, channel string) *user {

@@ -152,3 +152,12 @@ func BenchmarkJWTMiddleware(b *testing.B) {
 		handler.ServeHTTP(httptest.NewRecorder(), req)
 	}
 }
+
+func TestWithUserID(t *testing.T) {
+	for _, id := range []string{"42", ""} {
+		got, ok := UserID(WithUserID(context.Background(), id))
+		if !ok || got != id {
+			t.Errorf("UserID(WithUserID(%q)) = %q, %v", id, got, ok)
+		}
+	}
+}

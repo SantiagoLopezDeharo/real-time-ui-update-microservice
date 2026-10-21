@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"real-time-ui-update-microservice/internal/access"
 	"real-time-ui-update-microservice/internal/hub"
 )
 
@@ -13,8 +14,16 @@ type Broadcaster interface {
 	Broadcast(scope hub.Scope, channel string, payload []byte) int
 }
 
+// Publish rejects user channels on the public scope: no public client can
+// subscribe to them, so the message could never be delivered.
 func Publish(b Broadcaster, scope hub.Scope, maxBodyBytes int64) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		channel := channelFrom(r)
+		if scope == hub.Public && access.IsUserChannel(channel) {
+			http.Error(w, "User channels are private", http.StatusBadRequest)
+			return
+		}
+
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 		if err != nil {
 			if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
@@ -30,7 +39,7 @@ func Publish(b Broadcaster, scope hub.Scope, maxBodyBytes int64) http.HandlerFun
 			return
 		}
 
-		b.Broadcast(scope, channelFrom(r), body)
+		b.Broadcast(scope, channel, body)
 		w.WriteHeader(http.StatusAccepted)
 	}
 }

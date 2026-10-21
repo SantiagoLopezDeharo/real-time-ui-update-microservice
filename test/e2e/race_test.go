@@ -282,3 +282,76 @@ func TestConcurrentSubscribeAndPublishSameChannel(t *testing.T) {
 	}
 	t.Logf("%d background publishes raced with %d subscriptions", publishes.Load(), joiners)
 }
+
+func TestUserChannelIsolationUnderConcurrency(t *testing.T) {
+	s := startServer(t)
+	const users, tabsPerUser, perUser = 30, 2, 40
+	tabs := make([][]*user, users)
+	var all []*user
+	for i := range users {
+		for range tabsPerUser {
+			tab := s.connectAs(t, fmt.Sprintf("u%d", i), fmt.Sprintf("user:u%d", i))
+			tabs[i] = append(tabs[i], tab)
+			all = append(all, tab)
+		}
+	}
+	s.awaitSubscribed(t, all...)
+
+	stop := make(chan struct{})
+	var attackers sync.WaitGroup
+	var attempts, breaches atomic.Int64
+	for a := range 8 {
+		attackers.Go(func() {
+			token := s.userJWT(t, fmt.Sprintf("attacker%d", a))
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				conn, resp, err := s.dial(private, fmt.Sprintf("user:u%d", i%users), token, nil)
+				attempts.Add(1)
+				if err == nil {
+					breaches.Add(1)
+					_ = conn.Close()
+				} else if statusOf(resp) != http.StatusForbidden {
+					breaches.Add(1)
+				}
+			}
+		})
+	}
+
+	var publishers sync.WaitGroup
+	var failures atomic.Int64
+	for i := range users {
+		publishers.Go(func() {
+			for seq := range perUser {
+				if s.publish(t, private, fmt.Sprintf("user:u%d", i), message(map[string]any{"u": i, "seq": seq})) != http.StatusAccepted {
+					failures.Add(1)
+				}
+			}
+		})
+	}
+	publishers.Wait()
+	close(stop)
+	attackers.Wait()
+
+	if n := failures.Load(); n > 0 {
+		t.Fatalf("%d publishes failed", n)
+	}
+	if n := breaches.Load(); n > 0 {
+		t.Fatalf("%d of %d foreign subscriptions were not refused with 403", n, attempts.Load())
+	}
+	for i, userTabs := range tabs {
+		for _, tab := range userTabs {
+			for want, raw := range tab.collect(t, perUser, 30*time.Second) {
+				got := decode[struct{ U, Seq int }](t, raw)
+				if got.U != i || got.Seq != want {
+					t.Fatalf("user u%d: got message %+v, want seq %d for itself", i, got, want)
+				}
+			}
+			tab.expectNothing(t, 0)
+		}
+	}
+	t.Logf("%d foreign subscription attempts refused during %d personal deliveries", attempts.Load(), users*tabsPerUser*perUser)
+}

@@ -38,9 +38,12 @@ func JWTMiddleware(secret string, next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		ctx := context.WithValue(r.Context(), userIDKey{}, subject)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r.WithContext(WithUserID(r.Context(), subject)))
 	})
+}
+
+func WithUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, userIDKey{}, userID)
 }
 
 func UserID(ctx context.Context) (string, bool) {

@@ -45,8 +45,12 @@ func newFixture(t *testing.T) *fixture {
 }
 
 func (f *fixture) jwt(t *testing.T) string {
+	return f.jwtFor(t, "user")
+}
+
+func (f *fixture) jwtFor(t *testing.T, userID string) string {
 	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": "user"}).SignedString([]byte(f.cfg.JWTSecret))
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": userID}).SignedString([]byte(f.cfg.JWTSecret))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,5 +237,72 @@ func TestPprofServer(t *testing.T) {
 		if resp.StatusCode != want {
 			t.Errorf("%s: status = %d, want %d", path, resp.StatusCode, want)
 		}
+	}
+}
+
+func (f *fixture) dialStatus(t *testing.T, path string, query url.Values) int {
+	t.Helper()
+	conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(f.srv.URL, "http")+path+"?"+query.Encode(), nil)
+	if err == nil {
+		_ = conn.Close()
+		t.Fatalf("dial %s %v succeeded", path, query)
+	}
+	if resp == nil {
+		t.Fatalf("dial %s %v: %v", path, query, err)
+	}
+	return resp.StatusCode
+}
+
+func TestUserChannelsReachOnlyTheirOwner(t *testing.T) {
+	f := newFixture(t)
+	alice := f.dial(t, "/ws", url.Values{"token": {f.jwtFor(t, "alice")}, "channel": {"user:alice"}})
+	bob := f.dial(t, "/ws", url.Values{"token": {f.jwtFor(t, "bob")}, "channel": {"user:bob"}})
+	waitSubscribers(t, f.hub, hub.Private, "user:alice", 1)
+	waitSubscribers(t, f.hub, hub.Private, "user:bob", 1)
+
+	if code := f.post(t, "/update", "user:alice", `{"to":"alice"}`); code != http.StatusAccepted {
+		t.Fatalf("/update status = %d", code)
+	}
+	if code := f.post(t, "/update", "user:bob", `{"to":"bob"}`); code != http.StatusAccepted {
+		t.Fatalf("/update status = %d", code)
+	}
+	if got := read(t, alice); got != `{"to":"alice"}` {
+		t.Errorf("alice got %q", got)
+	}
+	if got := read(t, bob); got != `{"to":"bob"}` {
+		t.Errorf("bob got %q", got)
+	}
+}
+
+func TestUserChannelsRejectEveryoneElse(t *testing.T) {
+	f := newFixture(t)
+	tests := []struct {
+		name  string
+		path  string
+		query url.Values
+	}{
+		{"other user", "/ws", url.Values{"token": {f.jwtFor(t, "bob")}, "channel": {"user:alice"}}},
+		{"token without subject", "/ws", url.Values{"token": {f.jwtFor(t, "")}, "channel": {"user:"}}},
+		{"public endpoint", "/ws/public", url.Values{"channel": {"user:alice"}}},
+		{"public endpoint with owner token", "/ws/public", url.Values{"token": {f.jwtFor(t, "alice")}, "channel": {"user:alice"}}},
+	}
+	for _, tt := range tests {
+		if got := f.dialStatus(t, tt.path, tt.query); got != http.StatusForbidden {
+			t.Errorf("%s: status = %d, want 403", tt.name, got)
+		}
+	}
+	for _, sc := range []hub.Scope{hub.Private, hub.Public} {
+		for _, ch := range []string{"user:alice", "user:"} {
+			if n := f.hub.Subscribers(sc, ch); n != 0 {
+				t.Errorf("scope %d channel %q has %d subscribers after denials", sc, ch, n)
+			}
+		}
+	}
+
+	if got := f.dialStatus(t, "/ws", url.Values{"channel": {"user:alice"}}); got != http.StatusUnauthorized {
+		t.Errorf("missing JWT: status = %d, want 401 before the access check", got)
+	}
+	if code := f.post(t, "/publish", "user:alice", `{}`); code != http.StatusBadRequest {
+		t.Errorf("/publish to a user channel: status = %d, want 400", code)
 	}
 }
