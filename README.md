@@ -53,7 +53,7 @@ Deploying microservice nodes closer to your users reduces the burden on your mai
 # 🚀 Demo
 
 Prerequisites
-- Go (version 1.22.2 or higher)
+- Go (version 1.27.3 or higher)
 - Node.js & npm (for demo tools)
 
 Example .env file:
@@ -96,6 +96,34 @@ cd demo-tools/backend-simulator && npm i && npm start
 
 Now you should be able to test and demo the microservice in action and see real time event driven updates on the frontend-cli example program.
 
+# 🐳 Docker
+
+A ~10 MB multi-arch (`linux/amd64`, `linux/arm64`) image built from `scratch` and running as a non-root user is published on Docker Hub:
+
+```shell
+docker run --rm -p 8080:8080 \
+  -e JWT_SECRET=your-jwt-secret \
+  -e TIME_TOKEN_SECRET=your-time-token-secret \
+  slincsilver/real-time-ui-update-microservice:latest
+```
+
+`GET /healthz` returns `200` once the server is accepting connections, for liveness/readiness probes. The process shuts down gracefully on `SIGTERM`, sending every client a `1001 going away` close frame.
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JWT_SECRET` | – (required) | HMAC secret for user JWTs (`HS256`/`HS384`/`HS512` only) |
+| `TIME_TOKEN_SECRET` | – (required) | Shared secret for backend time-based tokens |
+| `PORT` | `8080` | HTTP listen port |
+| `TIME_WINDOW_SECONDS` | `3600` | Validity window of a time token, must be ≥ 1 |
+| `ALLOWED_CLOCK_SKEW` | `1` | Neighbouring windows accepted on each side, must be ≥ 0 |
+| `MAX_BODY_BYTES` | `1048576` | Maximum publish payload; larger requests get `413` |
+| `ALLOWED_ORIGINS` | – (any) | Comma separated WebSocket `Origin` allowlist; requests without `Origin` (non-browser clients) are always allowed |
+| `PPROF_ADDR` | – (off) | Address for an optional `net/http/pprof` listener, e.g. `127.0.0.1:6060`. Never expose it publicly |
+
+Invalid values stop the service at startup with every problem reported at once.
+
 # Usage
 
 This section shows the production endpoints and the parameters a backend or client must provide to publish and receive channel-scoped updates.
@@ -125,7 +153,7 @@ curl -X POST 'http://localhost:8080/publish?channel=news' \
 
 Notes:
 - The `channel` query parameter is optional; if omitted the server uses the `default` channel.
-- The time-based token must be created by your backend using the shared secret (see `cmd/internal/auth/timetoken.go` and the demo backend simulator for a reference implementation).
+- The time-based token must be created by your backend using the shared secret (see `internal/auth/timetoken.go` and the demo backend simulator for a reference implementation).
 
 ### Client -> Microservice (subscribe to a channel)
 
@@ -153,12 +181,46 @@ const ws = new WebSocket('wss://example.com/ws/public?channel=news');
 Behavior summary:
 - Clients subscribing with the same `channel` string will only receive messages published to that channel.
 - Authenticated and public clients are isolated: authenticated broadcasts (from `/update`) only go to authenticated clients on that channel; public broadcasts (from `/publish`) only go to public clients on that channel.
+- Every published payload is delivered as its own WebSocket text frame, byte for byte. Sequential publishes arrive in order.
+- Messages sent by clients are discarded; client frames over 512 bytes close the connection with `1009`.
+- Each client may have up to 4 MiB of undelivered payload queued. A client that falls further behind is disconnected with `1008 slow consumer` so it can never slow down other clients; it should reconnect and resynchronise.
 
 If you use the demo tools, the frontend CLI and backend simulator expose these channel options interactively so you can test different channel configurations quickly.
 
 
 
-### Disclaimer
-This project is licensed under the GNU General Public License v3.0. For more details, see the LICENSE file in the repository.
+# 🧪 Testing
+
+```shell
+make test        # unit tests with the race detector
+make e2e         # end-to-end suites against a race-detector build
+make e2e-image   # functional and security suites against the Docker image
+make perf        # performance scenarios and optimization report
+make bench       # micro benchmarks
+```
+
+- **Unit tests** cover every package, including time-token interoperability with the Node.js reference implementation, JWT algorithm-confusion attacks, body limits, origin policy, framing, ordering, ping/pong liveness, slow-consumer eviction and shutdown, plus a fuzz target for token parsing.
+- **End-to-end tests** (`test/e2e`, build tag `e2e`) build the real binary with the race detector and coverage, boot it with throwaway secrets and drive it with simulated backends and browser users:
+  - *functional*: fan-out, ordering, payload fidelity, channel and scope isolation, reconnects, graceful shutdown, configuration validation;
+  - *security*: forged/expired/replayed tokens, scope escalation, oversized bodies and headers, origin allowlist, WebSocket protocol violations, slowloris, connection floods with goroutine-leak detection, no secrets or internals in error responses;
+  - *concurrency*: concurrent publishers with exactly-once and per-publisher ordering checks, subscriber churn, slow consumers, shutdown under load. Any data race, panic or unclean exit reported by the server fails the run.
+- **Performance suite** profiles the live server through pprof and writes `test/e2e/reports/perf-<label>.md` with latency percentiles, throughput, memory and goroutines per connection, CPU/allocation/heap hotspots and the optimization opportunities they point to. `E2E_BINARY` profiles another build and `E2E_PERF_BASELINE` adds a comparison column.
+
+# ⚡ Performance
+
+Driven by the performance suite's findings, measured on an Apple M3 Pro (11 cores) with the load generator on the same host:
+
+| Metric | Before | After |
+|--------|-------:|------:|
+| Memory (RSS) per idle connection | 31.4 KiB | 16.0 KiB |
+| Goroutines per idle connection | 2 | 1 |
+| Multi-channel throughput (2000 users) | 237k msg/s | 237k msg/s |
+| Multi-channel delivery latency p99 | 4.9 ms | 4.0 ms |
+| Fan-out to 2000 users, delivery latency p50 / p99 | 4.5 / 11.7 ms | 4.5 / 10.8 ms |
+
+Throughput is bound by kernel write syscalls (one per delivered frame), so the gains are in memory per connection, allocation pressure and tail latency; a broadcast performs no heap allocation. The earlier implementation also merged queued messages into a single frame, which produced invalid JSON under bursts; every message is now a separate frame.
+
+### License
+This project is licensed under the MIT License. See the LICENSE file for details.
 
 
