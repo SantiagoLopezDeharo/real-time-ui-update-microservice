@@ -190,12 +190,12 @@ func TestServeDropsClientsThatStopAnsweringPings(t *testing.T) {
 func TestServeDisconnectsSlowConsumerWithoutAffectingOthers(t *testing.T) {
 	opts := fastOptions()
 	opts.MaxQueuedBytes = 512 << 10
-	opts.WriteWait = 200 * time.Millisecond
 	h := New(opts)
 	srv := newTestServer(t, h)
 	slow := subscribeN(t, h, srv, Public, "c", 1)[0]
 	fast := subscribeN(t, h, srv, Public, "c", 1)[0]
 
+	delivered := make(chan struct{})
 	received := make(chan int, 1)
 	go func() {
 		count := 0
@@ -206,20 +206,31 @@ func TestServeDisconnectsSlowConsumerWithoutAffectingOthers(t *testing.T) {
 				return
 			}
 			count++
+			delivered <- struct{}{}
 		}
 	}()
+	awaitFast := func() {
+		t.Helper()
+		select {
+		case <-delivered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("fast client stopped receiving")
+		}
+	}
 
+	// Each broadcast waits for the fast client, so only the slow one can fall
+	// behind even when the machine is too loaded for the reader to keep pace.
 	payload := `{"blob":"` + strings.Repeat("x", 256<<10) + `"}`
 	const messages = 200
 	for range messages {
 		h.Broadcast(Public, "c", []byte(payload))
-		time.Sleep(time.Millisecond)
+		awaitFast()
 	}
 
 	waitFor(t, "slow consumer dropped", func() bool { return h.Subscribers(Public, "c") == 1 })
 	_ = slow.Close()
 	mustBroadcast(t, h, Public, "c", `{"last":true}`)
-	time.Sleep(200 * time.Millisecond)
+	awaitFast()
 	_ = fast.Close()
 	if got := <-received; got != messages+1 {
 		t.Errorf("fast client received %d messages, want %d", got, messages+1)
