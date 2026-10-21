@@ -32,8 +32,8 @@ func scaled(n int) int {
 }
 
 func TestPerformance(t *testing.T) {
-	if testing.Short() {
-		t.Skip("performance suite skipped in short mode")
+	if testing.Short() || image != "" {
+		t.Skip("performance suite needs a local binary and is skipped in short mode")
 	}
 	s := startBinary(t, perfBinary)
 	r := newReport(t, s)

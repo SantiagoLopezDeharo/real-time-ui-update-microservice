@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
@@ -25,6 +24,7 @@ import (
 )
 
 var (
+	image      = os.Getenv("E2E_IMAGE")
 	raceBinary string
 	perfBinary string
 	coverDir   string
@@ -52,6 +52,9 @@ func runSuite(m *testing.M) int {
 		return 1
 	}
 
+	if image != "" {
+		return m.Run()
+	}
 	if custom := os.Getenv("E2E_BINARY"); custom != "" {
 		raceBinary, perfBinary = custom, custom
 	} else {
@@ -141,18 +144,25 @@ func startBinary(t *testing.T, binary string, opts ...option) *server {
 	return s
 }
 
+// launch starts the server binary, or the E2E_IMAGE container when set, with
+// throwaway secrets on a free host port.
 func launch(t *testing.T, binary string, opts ...option) *server {
 	t.Helper()
-	port := freePort(t)
+	hostPort, pprofPort := freePort(t), freePort(t)
 	env := map[string]string{
-		"PORT":                strconv.Itoa(port),
+		"PORT":                strconv.Itoa(hostPort),
 		"JWT_SECRET":          randomSecret(),
 		"TIME_TOKEN_SECRET":   randomSecret(),
 		"TIME_WINDOW_SECONDS": "30",
 		"ALLOWED_CLOCK_SKEW":  "1",
-		"PPROF_ADDR":          fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+		"PPROF_ADDR":          fmt.Sprintf("127.0.0.1:%d", pprofPort),
 		"GORACE":              "halt_on_error=0",
 		"GOCOVERDIR":          coverDir,
+	}
+	if image != "" {
+		env["PORT"], env["PPROF_ADDR"] = "8080", ":6060"
+		delete(env, "GORACE")
+		delete(env, "GOCOVERDIR")
 	}
 	for _, opt := range opts {
 		opt(env)
@@ -161,7 +171,7 @@ func launch(t *testing.T, binary string, opts ...option) *server {
 	s := &server{
 		t:          t,
 		env:        env,
-		addr:       "127.0.0.1:" + env["PORT"],
+		addr:       fmt.Sprintf("127.0.0.1:%d", hostPort),
 		jwtSecret:  env["JWT_SECRET"],
 		timeSecret: env["TIME_TOKEN_SECRET"],
 		logs:       &lockedBuffer{},
@@ -170,17 +180,21 @@ func launch(t *testing.T, binary string, opts ...option) *server {
 	s.baseURL = "http://" + s.addr
 	s.wsURL = "ws://" + s.addr
 	if env["PPROF_ADDR"] != "" {
-		s.pprofURL = "http://" + env["PPROF_ADDR"]
+		s.pprofURL = fmt.Sprintf("http://127.0.0.1:%d", pprofPort)
 	}
 	s.window, _ = strconv.ParseInt(env["TIME_WINDOW_SECONDS"], 10, 64)
 
-	s.cmd = exec.Command(binary)
-	s.cmd.Dir = t.TempDir()
+	if image != "" {
+		s.cmd = dockerRun(hostPort, pprofPort, env)
+	} else {
+		s.cmd = exec.Command(binary)
+		s.cmd.Dir = t.TempDir()
+		for k, v := range env {
+			s.cmd.Env = append(s.cmd.Env, k+"="+v)
+		}
+	}
 	s.cmd.Stdout = s.logs
 	s.cmd.Stderr = s.logs
-	for k, v := range env {
-		s.cmd.Env = append(s.cmd.Env, k+"="+v)
-	}
 	if err := s.cmd.Start(); err != nil {
 		t.Fatalf("start server: %v", err)
 	}
@@ -191,6 +205,17 @@ func launch(t *testing.T, binary string, opts ...option) *server {
 	return s
 }
 
+func dockerRun(hostPort, pprofPort int, env map[string]string) *exec.Cmd {
+	args := []string{"run", "--rm", "-p", fmt.Sprintf("127.0.0.1:%d:8080", hostPort)}
+	if env["PPROF_ADDR"] != "" {
+		args = append(args, "-p", fmt.Sprintf("127.0.0.1:%d:6060", pprofPort))
+	}
+	for k, v := range env {
+		args = append(args, "-e", k+"="+v)
+	}
+	return exec.Command("docker", append(args, image)...)
+}
+
 func (s *server) waitReady(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -199,8 +224,8 @@ func (s *server) waitReady(timeout time.Duration) error {
 			return fmt.Errorf("server exited early: %v", s.exitErr)
 		default:
 		}
-		if conn, err := net.DialTimeout("tcp", s.addr, 100*time.Millisecond); err == nil {
-			_ = conn.Close()
+		if resp, err := httpClient.Get(s.baseURL + "/healthz"); err == nil {
+			_ = resp.Body.Close()
 			s.detectPprof()
 			return nil
 		}
@@ -354,12 +379,5 @@ func (s *server) waitGoroutinesBelow(t *testing.T, limit int, timeout time.Durat
 			return n
 		}
 		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-func scanLines(r io.Reader, fn func(string)) {
-	sc := bufio.NewScanner(r)
-	for sc.Scan() {
-		fn(sc.Text())
 	}
 }

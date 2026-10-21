@@ -343,6 +343,9 @@ func TestStartupRejectsInvalidConfiguration(t *testing.T) {
 }
 
 func TestStartupFailsWhenPortIsTaken(t *testing.T) {
+	if image != "" {
+		t.Skip("the container port is always free")
+	}
 	l, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatal(err)
