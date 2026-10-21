@@ -33,7 +33,11 @@ func JWTMiddleware(secret string, next http.Handler) http.Handler {
 			return
 		}
 
-		subject, _ := token.Claims.GetSubject()
+		subject, err := token.Claims.GetSubject()
+		if err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		ctx := context.WithValue(r.Context(), userIDKey{}, subject)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
