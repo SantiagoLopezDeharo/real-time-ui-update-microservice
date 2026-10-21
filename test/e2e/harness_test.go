@@ -206,7 +206,8 @@ func launch(t *testing.T, binary string, opts ...option) *server {
 }
 
 func dockerRun(hostPort, pprofPort int, env map[string]string) *exec.Cmd {
-	args := []string{"run", "--rm", "-p", fmt.Sprintf("127.0.0.1:%d:8080", hostPort)}
+	args := []string{"run", "--rm", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+		"-p", fmt.Sprintf("127.0.0.1:%d:8080", hostPort)}
 	if env["PPROF_ADDR"] != "" {
 		args = append(args, "-p", fmt.Sprintf("127.0.0.1:%d:6060", pprofPort))
 	}

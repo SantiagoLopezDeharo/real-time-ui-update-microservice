@@ -1,0 +1,16 @@
+services:
+  ui-update:
+    image: slincsilver/real-time-ui-update-microservice:1.0.1
+    restart: unless-stopped
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      TIME_TOKEN_SECRET: ${TIME_TOKEN_SECRET:?set TIME_TOKEN_SECRET}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+    ports:
+      - "8080:8080"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: 2
+    pids_limit: 256

@@ -1,8 +1,11 @@
 IMAGE ?= slincsilver/real-time-ui-update-microservice
-VERSION ?= 1.0.0
+VERSION ?= 1.0.1
 PLATFORMS ?= linux/amd64,linux/arm64
+GOVULNCHECK ?= golang.org/x/vuln/cmd/govulncheck@v1.9.0
+SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct)
+BUILD_ARGS = --build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)
 
-.PHONY: test e2e e2e-short e2e-image perf bench docker-build docker-push
+.PHONY: test e2e e2e-short e2e-image perf bench scan docker-build docker-push
 
 test:
 	go test -race ./...
@@ -22,8 +25,15 @@ perf:
 bench:
 	go test -run=^$$ -bench=. -benchmem ./...
 
-docker-build:
-	docker build -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
+# Fails on any vulnerability reachable from our code, and on any fixable
+# critical or high vulnerability anywhere in the image.
+scan: docker-build
+	go run $(GOVULNCHECK) ./...
+	docker scout cves --exit-code --only-fixed --only-severity critical,high local://$(IMAGE):$(VERSION)
 
-docker-push:
-	docker buildx build --platform $(PLATFORMS) -t $(IMAGE):$(VERSION) -t $(IMAGE):latest --push .
+docker-build:
+	docker buildx build $(BUILD_ARGS) --load -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
+
+docker-push: scan
+	docker buildx build $(BUILD_ARGS) --platform $(PLATFORMS) --sbom=true --provenance=mode=max \
+		--output type=image,\"name=$(IMAGE):$(VERSION),$(IMAGE):latest\",push=true,rewrite-timestamp=true .
