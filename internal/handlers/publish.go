@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 
 	"real-time-ui-update-microservice/internal/hub"
 )
 
 type Broadcaster interface {
-	Broadcast(scope hub.Scope, channel string, payload []byte) (int, error)
+	Broadcast(scope hub.Scope, channel string, payload []byte) int
 }
 
 func Publish(b Broadcaster, scope hub.Scope, maxBodyBytes int64) http.HandlerFunc {
@@ -31,11 +30,7 @@ func Publish(b Broadcaster, scope hub.Scope, maxBodyBytes int64) http.HandlerFun
 			return
 		}
 
-		if _, err := b.Broadcast(scope, channelFrom(r), body); err != nil {
-			slog.Error("broadcast failed", "error", err)
-			http.Error(w, "Broadcast failed", http.StatusInternalServerError)
-			return
-		}
+		b.Broadcast(scope, channelFrom(r), body)
 		w.WriteHeader(http.StatusAccepted)
 	}
 }

@@ -32,8 +32,7 @@ var (
 )
 
 type outbound struct {
-	msg  *websocket.PreparedMessage
-	size int
+	payload []byte
 }
 
 // Client buffers outbound messages in a queue bounded by payload bytes, so a
@@ -86,16 +85,16 @@ func (h *Hub) Serve(conn *websocket.Conn, scope Scope, channel string) {
 	}()
 }
 
-// enqueue reports false when the message would exceed the queue budget. A
-// message larger than the budget is still accepted into an empty queue.
-func (c *Client) enqueue(msg *websocket.PreparedMessage, size int) bool {
+// enqueue reports false when the payload would exceed the queue budget. A
+// payload larger than the budget is still accepted into an empty queue.
+func (c *Client) enqueue(payload []byte) bool {
 	c.mu.Lock()
-	if len(c.queue) > 0 && c.queuedBytes+size > c.maxBytes {
+	if len(c.queue) > 0 && c.queuedBytes+len(payload) > c.maxBytes {
 		c.mu.Unlock()
 		return false
 	}
-	c.queue = append(c.queue, outbound{msg: msg, size: size})
-	c.queuedBytes += size
+	c.queue = append(c.queue, outbound{payload: payload})
+	c.queuedBytes += len(payload)
 	c.mu.Unlock()
 
 	select {
@@ -116,7 +115,7 @@ func (c *Client) takeQueue() []outbound {
 func (c *Client) release(batch []outbound) {
 	written := 0
 	for _, out := range batch {
-		written += out.size
+		written += len(out.payload)
 	}
 	clear(batch)
 	c.mu.Lock()
@@ -145,7 +144,7 @@ func (c *Client) writePump(opts Options) {
 			batch := c.takeQueue()
 			for _, out := range batch {
 				_ = c.conn.SetWriteDeadline(time.Now().Add(opts.WriteWait))
-				if err := c.conn.WritePreparedMessage(out.msg); err != nil {
+				if err := c.conn.WriteMessage(websocket.TextMessage, out.payload); err != nil {
 					return
 				}
 			}

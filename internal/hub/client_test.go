@@ -26,8 +26,8 @@ func TestServeDeliversExactPayloads(t *testing.T) {
 		`{"nested":{"deep":{"deeper":[{"x":true}]}}}`,
 	}
 	for _, p := range payloads {
-		if n, err := h.Broadcast(Private, "orders", []byte(p)); err != nil || n != len(conns) {
-			t.Fatalf("Broadcast(%s) = %d, %v", p, n, err)
+		if n := h.Broadcast(Private, "orders", []byte(p)); n != len(conns) {
+			t.Fatalf("Broadcast(%s) = %d", p, n)
 		}
 	}
 	for i, conn := range conns {
@@ -212,7 +212,7 @@ func TestServeDisconnectsSlowConsumerWithoutAffectingOthers(t *testing.T) {
 	payload := `{"blob":"` + strings.Repeat("x", 256<<10) + `"}`
 	const messages = 200
 	for range messages {
-		mustBroadcastAny(t, h, Public, "c", payload)
+		h.Broadcast(Public, "c", []byte(payload))
 		time.Sleep(time.Millisecond)
 	}
 
@@ -275,7 +275,7 @@ func TestServeConcurrentChurnAndBroadcasts(t *testing.T) {
 	for p := range publishers {
 		publishWG.Go(func() {
 			for i := range perPublisher {
-				mustBroadcastAny(t, h, Public, "stable", fmt.Sprintf(`{"p":%d,"i":%d}`, p, i))
+				h.Broadcast(Public, "stable", fmt.Appendf(nil, `{"p":%d,"i":%d}`, p, i))
 			}
 		})
 	}
@@ -301,14 +301,7 @@ func TestServeConcurrentChurnAndBroadcasts(t *testing.T) {
 
 func mustBroadcast(t *testing.T, h *Hub, scope Scope, channel, payload string) {
 	t.Helper()
-	if n, err := h.Broadcast(scope, channel, []byte(payload)); err != nil || n == 0 {
-		t.Fatalf("Broadcast = %d, %v", n, err)
-	}
-}
-
-func mustBroadcastAny(t *testing.T, h *Hub, scope Scope, channel, payload string) {
-	t.Helper()
-	if _, err := h.Broadcast(scope, channel, []byte(payload)); err != nil {
-		t.Errorf("Broadcast: %v", err)
+	if n := h.Broadcast(scope, channel, []byte(payload)); n == 0 {
+		t.Fatal("Broadcast reached no subscriber")
 	}
 }

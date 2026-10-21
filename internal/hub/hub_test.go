@@ -11,9 +11,8 @@ import (
 
 func TestBroadcastWithoutSubscribers(t *testing.T) {
 	h := New(DefaultOptions())
-	n, err := h.Broadcast(Public, "nobody", []byte(`{}`))
-	if err != nil || n != 0 {
-		t.Fatalf("Broadcast = %d, %v; want 0, nil", n, err)
+	if n := h.Broadcast(Public, "nobody", []byte(`{}`)); n != 0 {
+		t.Fatalf("Broadcast = %d, want 0", n)
 	}
 }
 
@@ -59,9 +58,8 @@ func TestBroadcastFakeClientsDeliveryAndIsolation(t *testing.T) {
 	}
 	defer h.pumps.Add(-len(target) - len(others))
 
-	n, err := h.Broadcast(Private, "orders", []byte(`{"id":1}`))
-	if err != nil || n != len(target) {
-		t.Fatalf("Broadcast = %d, %v; want %d, nil", n, err, len(target))
+	if n := h.Broadcast(Private, "orders", []byte(`{"id":1}`)); n != len(target) {
+		t.Fatalf("Broadcast = %d, want %d", n, len(target))
 	}
 	for i, c := range target {
 		if queued(c) != 1 {
@@ -82,10 +80,10 @@ func TestBroadcastDisconnectsSlowClients(t *testing.T) {
 	h.subscribe(fast)
 	defer h.pumps.Add(-2)
 
-	if n, _ := h.Broadcast(Public, "c", []byte(`1`)); n != 2 {
+	if n := h.Broadcast(Public, "c", []byte(`1`)); n != 2 {
 		t.Fatalf("first Broadcast delivered %d, want 2", n)
 	}
-	if n, _ := h.Broadcast(Public, "c", []byte(`2`)); n != 1 {
+	if n := h.Broadcast(Public, "c", []byte(`2`)); n != 1 {
 		t.Fatalf("second Broadcast delivered %d, want 1", n)
 	}
 	if !isClosed(slow) {
@@ -111,14 +109,14 @@ func TestQueueIsBoundedByBytesNotMessageCount(t *testing.T) {
 	payload := []byte(`{"seq":1234,"status":"ok"}`)
 	burst := (64 << 10) / len(payload)
 	for i := range burst {
-		if n, _ := h.Broadcast(Public, "burst", payload); n != 1 {
+		if n := h.Broadcast(Public, "burst", payload); n != 1 {
 			t.Fatalf("message %d of a %d-message burst rejected", i, burst)
 		}
 	}
 	if isClosed(c) {
 		t.Fatal("client evicted while within its byte budget")
 	}
-	if n, _ := h.Broadcast(Public, "burst", payload); n != 0 || !isClosed(c) {
+	if n := h.Broadcast(Public, "burst", payload); n != 0 || !isClosed(c) {
 		t.Fatal("client not evicted after exceeding its byte budget")
 	}
 }
@@ -126,14 +124,14 @@ func TestQueueIsBoundedByBytesNotMessageCount(t *testing.T) {
 func TestQueueAcceptsOversizedMessageWhenEmpty(t *testing.T) {
 	c := fakeClient(Public, "c", 10)
 	big := make([]byte, 100)
-	if !c.enqueue(nil, len(big)) {
+	if !c.enqueue(big) {
 		t.Fatal("oversized message rejected by empty queue")
 	}
-	if c.enqueue(nil, 1) {
+	if c.enqueue([]byte{1}) {
 		t.Fatal("message accepted on top of an over-budget queue")
 	}
 	drain(c)
-	if !c.enqueue(nil, len(big)) {
+	if !c.enqueue(big) {
 		t.Fatal("queue budget not released after draining")
 	}
 }
@@ -141,13 +139,13 @@ func TestQueueAcceptsOversizedMessageWhenEmpty(t *testing.T) {
 func TestReleaseTracksQueuedBytes(t *testing.T) {
 	c := fakeClient(Public, "c", 100)
 	for range 4 {
-		c.enqueue(nil, 25)
+		c.enqueue(make([]byte, 25))
 	}
 	batch := c.takeQueue()
 	if len(batch) != 4 {
 		t.Fatalf("batch = %d, want 4", len(batch))
 	}
-	if !c.enqueue(nil, 0) || c.enqueue(nil, 1) {
+	if !c.enqueue(nil) || c.enqueue([]byte{1}) {
 		t.Fatal("bytes released before the batch was written")
 	}
 	c.release(batch)
@@ -161,7 +159,7 @@ func TestReleaseTracksQueuedBytes(t *testing.T) {
 func TestEnqueueWakesWriterOnce(t *testing.T) {
 	c := fakeClient(Public, "c", 1<<20)
 	for range 10 {
-		c.enqueue(nil, 1)
+		c.enqueue([]byte{1})
 	}
 	if len(c.wake) != 1 {
 		t.Fatalf("wake signals = %d, want 1", len(c.wake))
@@ -228,7 +226,7 @@ func TestConcurrentSubscribeBroadcastUnsubscribe(t *testing.T) {
 			for range rounds {
 				c := fakeClient(Scope(w%2), channel, 2)
 				h.subscribe(c)
-				_, _ = h.Broadcast(Scope(w%2), channel, []byte(`{}`))
+				h.Broadcast(Scope(w%2), channel, []byte(`{}`))
 				_ = h.Subscribers(Scope(w%2), channel)
 				h.unsubscribe(c)
 				h.pumps.Done()
@@ -238,7 +236,7 @@ func TestConcurrentSubscribeBroadcastUnsubscribe(t *testing.T) {
 	for w := range workers {
 		wg.Go(func() {
 			for range rounds {
-				_, _ = h.Broadcast(Scope(w%2), fmt.Sprintf("ch-%d", w%4), []byte(`[]`))
+				h.Broadcast(Scope(w%2), fmt.Sprintf("ch-%d", w%4), []byte(`[]`))
 			}
 		})
 	}
@@ -261,7 +259,7 @@ func BenchmarkBroadcast(b *testing.B) {
 			payload := []byte(`{"id":"order-123","status":"shipped"}`)
 			b.ReportAllocs()
 			for b.Loop() {
-				_, _ = h.Broadcast(Public, "bench", payload)
+				h.Broadcast(Public, "bench", payload)
 				for _, c := range clients {
 					drain(c)
 				}
@@ -296,7 +294,7 @@ func BenchmarkBroadcastParallelChannels(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			_, _ = h.Broadcast(Public, fmt.Sprint(i%channels), payload)
+			h.Broadcast(Public, fmt.Sprint(i%channels), payload)
 			i++
 		}
 	})

@@ -19,12 +19,11 @@ type broadcastCall struct {
 
 type fakeBroadcaster struct {
 	calls []broadcastCall
-	err   error
 }
 
-func (f *fakeBroadcaster) Broadcast(scope hub.Scope, channel string, payload []byte) (int, error) {
+func (f *fakeBroadcaster) Broadcast(scope hub.Scope, channel string, payload []byte) int {
 	f.calls = append(f.calls, broadcastCall{scope, channel, string(payload)})
-	return 1, f.err
+	return 1
 }
 
 func publish(b Broadcaster, scope hub.Scope, limit int64, target string, body io.Reader) *httptest.ResponseRecorder {
@@ -161,17 +160,6 @@ func TestPublishBodyReadError(t *testing.T) {
 	}
 }
 
-func TestPublishBroadcastError(t *testing.T) {
-	b := &fakeBroadcaster{err: errors.New("boom")}
-	rec := publish(b, hub.Public, 1<<20, "/publish", strings.NewReader(`{}`))
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500", rec.Code)
-	}
-	if strings.Contains(rec.Body.String(), "boom") {
-		t.Errorf("internal error leaked to client: %q", rec.Body.String())
-	}
-}
-
 type infiniteReader struct{}
 
 func (infiniteReader) Read(p []byte) (int, error) {
@@ -197,4 +185,4 @@ func BenchmarkPublish(b *testing.B) {
 
 type discardBroadcaster struct{}
 
-func (discardBroadcaster) Broadcast(hub.Scope, string, []byte) (int, error) { return 0, nil }
+func (discardBroadcaster) Broadcast(hub.Scope, string, []byte) int { return 0 }

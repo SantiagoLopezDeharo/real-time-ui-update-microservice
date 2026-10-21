@@ -3,8 +3,6 @@ package hub
 import (
 	"context"
 	"sync"
-
-	"github.com/gorilla/websocket"
 )
 
 type Scope uint8
@@ -69,25 +67,15 @@ func (h *Hub) unsubscribe(c *Client) {
 }
 
 // Broadcast queues payload for every subscriber of the channel and returns how
-// many clients accepted it. Clients whose send buffer is full are disconnected.
-// The payload must not be modified after the call.
-func (h *Hub) Broadcast(scope Scope, channel string, payload []byte) (int, error) {
+// many clients accepted it. Clients whose queue is over budget are
+// disconnected. Subscribers share the payload, so it must not be modified
+// after the call.
+func (h *Hub) Broadcast(scope Scope, channel string, payload []byte) int {
 	h.mu.RLock()
 	subs := h.topics[topic{scope: scope, channel: channel}]
-	if len(subs) == 0 {
-		h.mu.RUnlock()
-		return 0, nil
-	}
-
-	msg, err := websocket.NewPreparedMessage(websocket.TextMessage, payload)
-	if err != nil {
-		h.mu.RUnlock()
-		return 0, err
-	}
-
 	var slow []*Client
 	for c := range subs {
-		if !c.enqueue(msg, len(payload)) {
+		if !c.enqueue(payload) {
 			slow = append(slow, c)
 		}
 	}
@@ -97,7 +85,7 @@ func (h *Hub) Broadcast(scope Scope, channel string, payload []byte) (int, error
 	for _, c := range slow {
 		c.close(closeSlow)
 	}
-	return delivered, nil
+	return delivered
 }
 
 func (h *Hub) Subscribers(scope Scope, channel string) int {
