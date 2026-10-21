@@ -81,7 +81,7 @@ func (r *report) scenarioFanOut(users []*user, messages, ratePerSecond int) {
 		s.mustPublish(t, public, "fanout", stamped(i, 64))
 		time.Sleep(time.Until(start.Add(time.Duration(i+1) * interval)))
 	}
-	latencies := collectLatencies(t, users, messages)
+	latencies, _ := collectLatencies(t, users, messages)
 	stopProfile()
 
 	sc := r.scenario(name, fmt.Sprintf("%d messages at %d/s to %d users on one channel", messages, ratePerSecond, len(users)))
@@ -166,8 +166,8 @@ func (r *report) scenarioLargePayloads(n, messages, size int) {
 	for i := range messages {
 		s.mustPublish(t, public, "large", stamped(i, size))
 	}
-	latencies := collectLatencies(t, users, messages)
-	elapsed := time.Since(start)
+	latencies, lastArrival := collectLatencies(t, users, messages)
+	elapsed := lastArrival.Sub(start)
 	stopProfile()
 
 	sc := r.scenario(name, fmt.Sprintf("%d × %d KiB messages to %d users", messages, size>>10, n))
@@ -198,13 +198,17 @@ func sentAt(t testing.TB, data []byte) time.Time {
 	return time.Unix(0, nanos)
 }
 
-func collectLatencies(t *testing.T, users []*user, messages int) []time.Duration {
+func collectLatencies(t *testing.T, users []*user, messages int) ([]time.Duration, time.Time) {
 	t.Helper()
 	latencies := make([]time.Duration, 0, len(users)*messages)
+	var lastArrival time.Time
 	for _, u := range users {
 		for _, d := range u.deliveries(t, messages, 60*time.Second) {
 			latencies = append(latencies, d.at.Sub(sentAt(t, d.data)))
+			if d.at.After(lastArrival) {
+				lastArrival = d.at
+			}
 		}
 	}
-	return latencies
+	return latencies, lastArrival
 }

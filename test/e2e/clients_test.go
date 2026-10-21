@@ -118,6 +118,8 @@ type user struct {
 	frames  atomic.Int64
 	probed  atomic.Bool
 
+	values []delivery
+
 	mu       sync.Mutex
 	inbox    []delivery
 	notify   chan struct{}
@@ -204,6 +206,8 @@ func (s *server) connectMany(t testing.TB, sc scope, channel string, n int) []*u
 	return users
 }
 
+// read only timestamps frames so the simulated user never becomes the
+// bottleneck; frames are split into JSON values lazily by take.
 func (u *user) read() {
 	defer close(u.done)
 	for {
@@ -215,43 +219,53 @@ func (u *user) read() {
 			return
 		}
 		at := time.Now()
-		if !bytes.HasPrefix(frame, []byte(probePrefix)) {
+		if bytes.HasPrefix(frame, []byte(probePrefix)) {
+			u.probed.Store(true)
+		} else {
 			u.frames.Add(1)
 		}
-		dec := json.NewDecoder(bytes.NewReader(frame))
-		for {
-			var raw json.RawMessage
-			if err := dec.Decode(&raw); err != nil {
-				break
-			}
-			if bytes.HasPrefix(raw, []byte(probePrefix)) {
-				u.probed.Store(true)
-				continue
-			}
-			u.mu.Lock()
-			u.inbox = append(u.inbox, delivery{data: raw, at: at})
-			u.mu.Unlock()
-			select {
-			case u.notify <- struct{}{}:
-			default:
-			}
+		u.mu.Lock()
+		u.inbox = append(u.inbox, delivery{data: frame, at: at})
+		u.mu.Unlock()
+		select {
+		case u.notify <- struct{}{}:
+		default:
 		}
 	}
 }
 
 func (u *user) take(max int) []delivery {
 	u.mu.Lock()
-	defer u.mu.Unlock()
-	n := min(max, len(u.inbox))
-	out := u.inbox[:n:n]
-	u.inbox = u.inbox[n:]
+	frames := u.inbox
+	u.inbox = nil
+	u.mu.Unlock()
+
+	for _, f := range frames {
+		u.values = append(u.values, splitValues(f)...)
+	}
+	n := min(max, len(u.values))
+	out := u.values[:n:n]
+	u.values = u.values[n:]
 	return out
 }
 
-func (u *user) pending() int {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return len(u.inbox)
+// splitValues returns the non-probe JSON documents in a frame, which lets the
+// suite measure servers that concatenate several documents into one frame.
+func splitValues(f delivery) []delivery {
+	if !bytes.HasPrefix(f.data, []byte(probePrefix)) && json.Valid(f.data) {
+		return []delivery{f}
+	}
+	var out []delivery
+	dec := json.NewDecoder(bytes.NewReader(f.data))
+	for {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return out
+		}
+		if !bytes.HasPrefix(raw, []byte(probePrefix)) {
+			out = append(out, delivery{data: raw, at: f.at})
+		}
+	}
 }
 
 func (u *user) err() error {
