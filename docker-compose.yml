@@ -1,6 +1,6 @@
 services:
   ui-update:
-    image: slincsilver/real-time-ui-update-microservice:1.0.1
+    image: slincsilver/real-time-ui-update-microservice:1.1.0
     restart: unless-stopped
     environment:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}

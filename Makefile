@@ -1,5 +1,5 @@
 IMAGE ?= slincsilver/real-time-ui-update-microservice
-VERSION ?= 1.0.1
+VERSION ?= 1.1.0
 PLATFORMS ?= linux/amd64,linux/arm64
 GOVULNCHECK ?= golang.org/x/vuln/cmd/govulncheck@v1.9.0
 SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct -- go.mod go.sum cmd internal pkg Dockerfile .dockerignore)

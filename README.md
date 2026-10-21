@@ -106,7 +106,7 @@ A ~10 MB multi-arch (`linux/amd64`, `linux/arm64`) image built from `scratch` an
 docker run --rm -p 8080:8080 \
   -e JWT_SECRET=your-jwt-secret \
   -e TIME_TOKEN_SECRET=your-time-token-secret \
-  slincsilver/real-time-ui-update-microservice:1.0.1
+  slincsilver/real-time-ui-update-microservice:1.1.0
 ```
 
 `GET /healthz` returns `200` once the server is accepting connections, for liveness/readiness probes. The process shuts down gracefully on `SIGTERM`, sending every client a `1001 going away` close frame.
@@ -119,12 +119,12 @@ docker run --rm -p 8080:8080 \
 - **Scanned before publishing**: `make docker-push` runs `make scan` first and refuses to publish if `govulncheck` finds a vulnerability reachable from the code or Docker Scout finds a fixable critical/high CVE in the image.
 - **Attested**: every release carries an SBOM and SLSA provenance (max mode):
   ```shell
-  docker buildx imagetools inspect slincsilver/real-time-ui-update-microservice:1.0.1 --format '{{json .SBOM}}'
-  docker buildx imagetools inspect slincsilver/real-time-ui-update-microservice:1.0.1 --format '{{json .Provenance}}'
+  docker buildx imagetools inspect slincsilver/real-time-ui-update-microservice:1.1.0 --format '{{json .SBOM}}'
+  docker buildx imagetools inspect slincsilver/real-time-ui-update-microservice:1.1.0 --format '{{json .Provenance}}'
   ```
 - **Signed**: releases are signed keyless with [Sigstore cosign](https://docs.sigstore.dev/); verify before deploying:
   ```shell
-  cosign verify slincsilver/real-time-ui-update-microservice:1.0.1 \
+  cosign verify slincsilver/real-time-ui-update-microservice:1.1.0 \
     --certificate-identity=santiagolhgpro@gmail.com \
     --certificate-oidc-issuer=https://accounts.google.com
   ```
