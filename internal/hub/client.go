@@ -65,8 +65,8 @@ func newClient(conn *websocket.Conn, t topic, maxBytes int) *Client {
 	}
 }
 
-// Serve subscribes conn to the channel and pumps messages until the connection
-// ends. It blocks, so it is meant to run on the HTTP handler goroutine.
+// Serve subscribes conn to the channel and starts its pumps. It returns
+// immediately so the HTTP handler can exit and release the request state.
 func (h *Hub) Serve(conn *websocket.Conn, scope Scope, channel string) {
 	c := newClient(conn, topic{scope: scope, channel: channel}, h.opts.MaxQueuedBytes)
 	if !h.subscribe(c) {
@@ -79,10 +79,11 @@ func (h *Hub) Serve(conn *websocket.Conn, scope Scope, channel string) {
 		defer h.pumps.Done()
 		c.writePump(h.opts)
 	}()
-	c.readPump(h.opts)
-
-	h.unsubscribe(c)
-	c.close(closeNormal)
+	go func() {
+		c.readPump(h.opts)
+		h.unsubscribe(c)
+		c.close(closeNormal)
+	}()
 }
 
 // enqueue reports false when the message would exceed the queue budget. A
