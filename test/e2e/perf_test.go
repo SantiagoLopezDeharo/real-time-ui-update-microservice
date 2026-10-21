@@ -164,6 +164,9 @@ func (r *report) scenarioLargePayloads(n, messages, size int) {
 
 	start := time.Now()
 	for i := range messages {
+		if i >= largePayloadWindow {
+			awaitFrames(t, users, int64(i-largePayloadWindow+1))
+		}
 		s.mustPublish(t, public, "large", stamped(i, size))
 	}
 	latencies, lastArrival := collectLatencies(t, users, messages)
@@ -175,6 +178,29 @@ func (r *report) scenarioLargePayloads(n, messages, size int) {
 	sc.latency(latencies)
 	for _, u := range users {
 		_ = u.conn.Close()
+	}
+}
+
+// largePayloadWindow caps the messages each user may have outstanding at 2 MiB,
+// half the server's slow-consumer budget, so the scenario measures sustained
+// bandwidth instead of whether a loaded load generator happens to keep pace.
+const largePayloadWindow = 8
+
+func awaitFrames(t *testing.T, users []*user, n int64) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for _, u := range users {
+		for u.frames.Load() < n {
+			select {
+			case <-u.done:
+				t.Fatalf("connection on %q closed after %d frames: %v", u.channel, u.frames.Load(), u.err())
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("user on %q received %d/%d frames", u.channel, u.frames.Load(), n)
+			}
+			time.Sleep(100 * time.Microsecond)
+		}
 	}
 }
 
