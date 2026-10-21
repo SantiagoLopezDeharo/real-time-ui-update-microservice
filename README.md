@@ -104,10 +104,29 @@ A ~10 MB multi-arch (`linux/amd64`, `linux/arm64`) image built from `scratch` an
 docker run --rm -p 8080:8080 \
   -e JWT_SECRET=your-jwt-secret \
   -e TIME_TOKEN_SECRET=your-time-token-secret \
-  slincsilver/real-time-ui-update-microservice:latest
+  slincsilver/real-time-ui-update-microservice:1.0.1
 ```
 
 `GET /healthz` returns `200` once the server is accepting connections, for liveness/readiness probes. The process shuts down gracefully on `SIGTERM`, sending every client a `1001 going away` close frame.
+
+## Image security and supply chain
+
+- **Minimal image**: `scratch` base containing only the static binary, running as UID `65532`. No shell, package manager or libc to exploit.
+- **Pinned build**: the Go builder image is pinned by digest and module checksums are verified against `go.sum`; the build context is an allowlist of sources only.
+- **Reproducible**: layer timestamps are set to the last commit time (`SOURCE_DATE_EPOCH`), so rebuilding a commit yields a bit-identical image digest.
+- **Scanned before publishing**: `make docker-push` runs `make scan` first and refuses to publish if `govulncheck` finds a vulnerability reachable from the code or Docker Scout finds a fixable critical/high CVE in the image.
+- **Attested**: every release carries an SBOM and SLSA provenance (max mode):
+  ```shell
+  docker buildx imagetools inspect slincsilver/real-time-ui-update-microservice:1.0.1 --format '{{json .SBOM}}'
+  docker buildx imagetools inspect slincsilver/real-time-ui-update-microservice:1.0.1 --format '{{json .Provenance}}'
+  ```
+- **Signed**: releases are signed keyless with [Sigstore cosign](https://docs.sigstore.dev/); verify before deploying:
+  ```shell
+  cosign verify slincsilver/real-time-ui-update-microservice:1.0.1 \
+    --certificate-identity=santiagolhgpro@gmail.com \
+    --certificate-oidc-issuer=https://accounts.google.com
+  ```
+- **Run hardened**: `docker-compose.yml` runs the service with a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges` and memory/CPU/PID limits. The equivalent `docker run` flags are `--read-only --cap-drop=ALL --security-opt=no-new-privileges`; `make e2e-image` runs the test suites against the container with these restrictions.
 
 ## Configuration
 
