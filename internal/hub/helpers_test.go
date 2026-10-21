@@ -112,8 +112,12 @@ func expectClose(t *testing.T, conn *websocket.Conn, code int) {
 	}
 }
 
+// fakeClient has no connection; its writer is pre-claimed so tests drive the
+// queue by hand and no flush goroutine ever starts.
 func fakeClient(scope Scope, channel string, maxBytes int) *Client {
-	return newClient(nil, topic{scope: scope, channel: channel}, maxBytes)
+	c := newClient(nil, topic{scope: scope, channel: channel}, Options{MaxQueuedBytes: maxBytes}, func() {})
+	c.writing = true
+	return c
 }
 
 func queued(c *Client) int {
@@ -122,15 +126,18 @@ func queued(c *Client) int {
 	return len(c.queue)
 }
 
+func takeQueue(c *Client) []outbound {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.takeQueueLocked()
+}
+
 func drain(c *Client) {
-	c.release(c.takeQueue())
+	c.release(takeQueue(c))
 }
 
 func isClosed(c *Client) bool {
-	select {
-	case <-c.done:
-		return true
-	default:
-		return false
-	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closeFrame != nil
 }

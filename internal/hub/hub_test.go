@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -141,7 +142,7 @@ func TestReleaseTracksQueuedBytes(t *testing.T) {
 	for range 4 {
 		c.enqueue(make([]byte, 25))
 	}
-	batch := c.takeQueue()
+	batch := takeQueue(c)
 	if len(batch) != 4 {
 		t.Fatalf("batch = %d, want 4", len(batch))
 	}
@@ -156,16 +157,41 @@ func TestReleaseTracksQueuedBytes(t *testing.T) {
 	}
 }
 
-func TestEnqueueWakesWriterOnce(t *testing.T) {
+func TestQueueBuffersNeverAlias(t *testing.T) {
 	c := fakeClient(Public, "c", 1<<20)
-	for range 10 {
-		c.enqueue([]byte{1})
+	c.enqueue([]byte("x"))
+	drain(c)
+	takeQueue(c)
+
+	c.enqueue([]byte("y"))
+	batch := takeQueue(c)
+	c.enqueue([]byte("z"))
+	if len(batch) != 1 || string(batch[0].payload) != "y" {
+		t.Fatalf("in-flight batch overwritten by a later enqueue: %q", batch[0].payload)
 	}
-	if len(c.wake) != 1 {
-		t.Fatalf("wake signals = %d, want 1", len(c.wake))
+}
+
+func TestWriterIsClaimedOnce(t *testing.T) {
+	c := newClient(nil, topic{}, DefaultOptions(), func() {})
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.claimWriter() {
+		t.Fatal("first claim refused")
 	}
-	if got := len(c.takeQueue()); got != 10 {
-		t.Fatalf("drained %d messages, want 10", got)
+	if c.claimWriter() {
+		t.Fatal("second claim granted while a writer is running")
+	}
+}
+
+func TestClosedClientRejectsMessagesAndPings(t *testing.T) {
+	c := fakeClient(Public, "c", 1<<20)
+	c.close(closeSlow)
+	if c.enqueue([]byte(`{}`)) {
+		t.Fatal("closed client accepted a message")
+	}
+	c.ping()
+	if queued(c) != 0 {
+		t.Fatal("closed client queued a ping")
 	}
 }
 
@@ -280,10 +306,11 @@ func BenchmarkBroadcastParallelChannels(b *testing.B) {
 			go func() {
 				for {
 					select {
-					case <-c.wake:
-						drain(c)
 					case <-stop:
 						return
+					default:
+						drain(c)
+						runtime.Gosched()
 					}
 				}
 			}()
