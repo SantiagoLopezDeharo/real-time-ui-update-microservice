@@ -4,8 +4,11 @@ PLATFORMS ?= linux/amd64,linux/arm64
 GOVULNCHECK ?= golang.org/x/vuln/cmd/govulncheck@v1.9.0
 SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct)
 BUILD_ARGS = --build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)
+COSIGN_IDENTITY ?= santiagolhgpro@gmail.com
+COSIGN_ISSUER ?= https://accounts.google.com
+DIGEST = $(shell docker buildx imagetools inspect $(IMAGE):$(VERSION) --format '{{json .Manifest.Digest}}' | tr -d '"')
 
-.PHONY: test e2e e2e-short e2e-image perf bench scan docker-build docker-push
+.PHONY: test e2e e2e-short e2e-image perf bench scan docker-build docker-push sign verify
 
 test:
 	go test -race ./...
@@ -37,3 +40,11 @@ docker-build:
 docker-push: scan
 	docker buildx build $(BUILD_ARGS) --platform $(PLATFORMS) --sbom=true --provenance=mode=max \
 		--output type=image,\"name=$(IMAGE):$(VERSION),$(IMAGE):latest\",push=true,rewrite-timestamp=true .
+
+# Keyless Sigstore signature of the pushed multi-arch index; opens a browser
+# to authenticate the signer.
+sign:
+	cosign sign --yes $(IMAGE)@$(DIGEST)
+
+verify:
+	cosign verify --certificate-identity=$(COSIGN_IDENTITY) --certificate-oidc-issuer=$(COSIGN_ISSUER) $(IMAGE):$(VERSION) > /dev/null
