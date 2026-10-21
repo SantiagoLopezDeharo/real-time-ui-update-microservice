@@ -216,7 +216,7 @@ type hotspotRule struct {
 
 var cpuRules = []hotspotRule{
 	{regexp.MustCompile(`syscall\.(syscall|write|rawsyscalln?)|internal/poll\.\(\*FD\)\.Write|writev`), "syscalls",
-		"One write syscall per frame dominates. Coalesce queued frames into a single buffered write (or writev) per writer wake-up."},
+		"Kernel time dominates: every delivery to a distinct socket costs at least one write. Coalescing queued frames per client (a frame-level websocket library with a buffered writer) only helps backlogged clients; beyond that the lever is horizontal scaling or batched IO such as io_uring."},
 	{regexp.MustCompile(`runtime\.(mallocgc|gcBgMarkWorker|scanobject|gcDrain|memclrNoHeapPointers)`), "garbage collection",
 		"Allocation and GC work are significant. Reduce per-message and per-request allocations (see the allocation profile) or tune GOGC/GOMEMLIMIT."},
 	{regexp.MustCompile(`NewPreparedMessage|prepareFrame|\(\*PreparedMessage\)\.frame`), "message preparation",
