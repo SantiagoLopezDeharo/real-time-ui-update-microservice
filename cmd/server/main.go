@@ -1,41 +1,70 @@
 package main
 
 import (
-	"log"
+	"context"
+	"errors"
+	"log/slog"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"real-time-ui-update-microservice/cmd/config"
-	"real-time-ui-update-microservice/cmd/internal/auth"
-	"real-time-ui-update-microservice/cmd/internal/handlers"
-	"real-time-ui-update-microservice/cmd/internal/hub"
+	"real-time-ui-update-microservice/internal/config"
+	"real-time-ui-update-microservice/internal/hub"
+	"real-time-ui-update-microservice/internal/server"
 
-	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
 )
 
+const shutdownTimeout = 10 * time.Second
+
 func main() {
-	// Load configuration
-	cfg := config.Load()
+	if err := run(); err != nil {
+		slog.Error("server stopped", "error", err)
+		os.Exit(1)
+	}
+}
 
-	// Create a new hub
-	h := hub.NewHub()
+func run() error {
+	_ = godotenv.Load()
+	cfg, err := config.Load(os.Getenv)
+	if err != nil {
+		return err
+	}
 
-	// Run the hub in a goroutine
-	go h.Run()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	r := mux.NewRouter()
+	h := hub.New(hub.DefaultOptions())
+	srv := server.New(":"+cfg.Port, server.Routes(cfg, h))
+	errs := make(chan error, 2)
 
-	// WebSocket endpoint with JWT auth
-	r.Handle("/ws", auth.Middleware(handlers.HandleWebSocket(h)))
+	go func() { errs <- serve(srv) }()
+	slog.Info("server listening", "port", cfg.Port)
 
-	// Public WebSocket endpoint (no JWT required)
-	r.Handle("/ws/public", handlers.HandleWebSocketPublic(h))
+	if cfg.PprofAddr != "" {
+		debug := server.Pprof(cfg.PprofAddr)
+		go func() { errs <- serve(debug) }()
+		defer debug.Close()
+		slog.Info("pprof listening", "addr", cfg.PprofAddr)
+	}
 
-	// Order update endpoint with time-based token authentication
-	r.Handle("/update", auth.TimeTokenMiddleware(handlers.HandleOrderUpdate(h))).Methods("POST")
+	select {
+	case err := <-errs:
+		return err
+	case <-ctx.Done():
+	}
 
-	// Public HTTP endpoint for clients that do not require authentication
-	r.Handle("/publish", auth.TimeTokenMiddleware(handlers.HandleOrderPublish(h))).Methods("POST")
+	slog.Info("shutting down")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	return errors.Join(srv.Shutdown(shutdownCtx), h.Shutdown(shutdownCtx))
+}
 
-	log.Printf("Server starting on :%s", cfg.Port)
-	log.Fatal(http.ListenAndServe(":"+cfg.Port, r))
+func serve(srv *http.Server) error {
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
