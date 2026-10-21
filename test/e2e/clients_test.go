@@ -375,4 +375,3 @@ func (sc scope) String() string {
 	}
 	return "public"
 }
-
