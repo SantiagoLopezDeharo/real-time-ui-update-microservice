@@ -64,12 +64,12 @@ func TestBroadcastFakeClientsDeliveryAndIsolation(t *testing.T) {
 		t.Fatalf("Broadcast = %d, %v; want %d, nil", n, err, len(target))
 	}
 	for i, c := range target {
-		if len(c.send) != 1 {
-			t.Errorf("target %d queued %d messages, want 1", i, len(c.send))
+		if queued(c) != 1 {
+			t.Errorf("target %d queued %d messages, want 1", i, queued(c))
 		}
 	}
 	for i, c := range others {
-		if len(c.send) != 0 {
+		if queued(c) != 0 {
 			t.Errorf("non-target %d (%+v) received a message", i, c.topic)
 		}
 	}
@@ -77,7 +77,7 @@ func TestBroadcastFakeClientsDeliveryAndIsolation(t *testing.T) {
 
 func TestBroadcastDisconnectsSlowClients(t *testing.T) {
 	h := New(DefaultOptions())
-	slow, fast := fakeClient(Public, "c", 1), fakeClient(Public, "c", 8)
+	slow, fast := fakeClient(Public, "c", 1), fakeClient(Public, "c", 2)
 	h.subscribe(slow)
 	h.subscribe(fast)
 	defer h.pumps.Add(-2)
@@ -97,8 +97,77 @@ func TestBroadcastDisconnectsSlowClients(t *testing.T) {
 	if isClosed(fast) {
 		t.Error("fast client closed")
 	}
-	if len(fast.send) != 2 {
-		t.Errorf("fast client queued %d, want 2", len(fast.send))
+	if queued(fast) != 2 {
+		t.Errorf("fast client queued %d, want 2", queued(fast))
+	}
+}
+
+func TestQueueIsBoundedByBytesNotMessageCount(t *testing.T) {
+	h := New(DefaultOptions())
+	c := fakeClient(Public, "burst", 64<<10)
+	h.subscribe(c)
+	defer h.pumps.Done()
+
+	payload := []byte(`{"seq":1234,"status":"ok"}`)
+	burst := (64 << 10) / len(payload)
+	for i := range burst {
+		if n, _ := h.Broadcast(Public, "burst", payload); n != 1 {
+			t.Fatalf("message %d of a %d-message burst rejected", i, burst)
+		}
+	}
+	if isClosed(c) {
+		t.Fatal("client evicted while within its byte budget")
+	}
+	if n, _ := h.Broadcast(Public, "burst", payload); n != 0 || !isClosed(c) {
+		t.Fatal("client not evicted after exceeding its byte budget")
+	}
+}
+
+func TestQueueAcceptsOversizedMessageWhenEmpty(t *testing.T) {
+	c := fakeClient(Public, "c", 10)
+	big := make([]byte, 100)
+	if !c.enqueue(nil, len(big)) {
+		t.Fatal("oversized message rejected by empty queue")
+	}
+	if c.enqueue(nil, 1) {
+		t.Fatal("message accepted on top of an over-budget queue")
+	}
+	drain(c)
+	if !c.enqueue(nil, len(big)) {
+		t.Fatal("queue budget not released after draining")
+	}
+}
+
+func TestReleaseTracksQueuedBytes(t *testing.T) {
+	c := fakeClient(Public, "c", 100)
+	for range 4 {
+		c.enqueue(nil, 25)
+	}
+	batch := c.takeQueue()
+	if len(batch) != 4 {
+		t.Fatalf("batch = %d, want 4", len(batch))
+	}
+	if !c.enqueue(nil, 0) || c.enqueue(nil, 1) {
+		t.Fatal("bytes released before the batch was written")
+	}
+	c.release(batch)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.queuedBytes != 0 {
+		t.Fatalf("queuedBytes = %d after release, want 0", c.queuedBytes)
+	}
+}
+
+func TestEnqueueWakesWriterOnce(t *testing.T) {
+	c := fakeClient(Public, "c", 1<<20)
+	for range 10 {
+		c.enqueue(nil, 1)
+	}
+	if len(c.wake) != 1 {
+		t.Fatalf("wake signals = %d, want 1", len(c.wake))
+	}
+	if got := len(c.takeQueue()); got != 10 {
+		t.Fatalf("drained %d messages, want 10", got)
 	}
 }
 
@@ -194,7 +263,7 @@ func BenchmarkBroadcast(b *testing.B) {
 			for b.Loop() {
 				_, _ = h.Broadcast(Public, "bench", payload)
 				for _, c := range clients {
-					<-c.send
+					drain(c)
 				}
 			}
 		})
@@ -208,12 +277,13 @@ func BenchmarkBroadcastParallelChannels(b *testing.B) {
 	defer close(stop)
 	for ch := range channels {
 		for range 16 {
-			c := fakeClient(Public, fmt.Sprint(ch), 256)
+			c := fakeClient(Public, fmt.Sprint(ch), 1<<20)
 			h.subscribe(c)
 			go func() {
 				for {
 					select {
-					case <-c.send:
+					case <-c.wake:
+						drain(c)
 					case <-stop:
 						return
 					}

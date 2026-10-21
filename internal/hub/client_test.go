@@ -189,7 +189,7 @@ func TestServeDropsClientsThatStopAnsweringPings(t *testing.T) {
 
 func TestServeDisconnectsSlowConsumerWithoutAffectingOthers(t *testing.T) {
 	opts := fastOptions()
-	opts.SendBuffer = 4
+	opts.MaxQueuedBytes = 512 << 10
 	opts.WriteWait = 200 * time.Millisecond
 	h := New(opts)
 	srv := newTestServer(t, h)

@@ -112,12 +112,18 @@ func expectClose(t *testing.T, conn *websocket.Conn, code int) {
 	}
 }
 
-func fakeClient(scope Scope, channel string, buffer int) *Client {
-	return &Client{
-		topic: topic{scope: scope, channel: channel},
-		send:  make(chan *websocket.PreparedMessage, buffer),
-		done:  make(chan struct{}),
-	}
+func fakeClient(scope Scope, channel string, maxBytes int) *Client {
+	return newClient(nil, topic{scope: scope, channel: channel}, maxBytes)
+}
+
+func queued(c *Client) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.queue)
+}
+
+func drain(c *Client) {
+	c.release(c.takeQueue())
 }
 
 func isClosed(c *Client) bool {

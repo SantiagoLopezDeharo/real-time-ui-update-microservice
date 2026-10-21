@@ -87,7 +87,7 @@ func (h *Hub) Broadcast(scope Scope, channel string, payload []byte) (int, error
 
 	var slow []*Client
 	for c := range subs {
-		if !c.enqueue(msg) {
+		if !c.enqueue(msg, len(payload)) {
 			slow = append(slow, c)
 		}
 	}
